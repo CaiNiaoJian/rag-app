@@ -12,6 +12,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
+import { ApiError } from "../api";
 import { useApp } from "../appctx";
 import { Badge } from "../components/Badge";
 import { ConfirmModal } from "../components/Modal";
@@ -64,11 +65,26 @@ function moduleList(resp: unknown): ModuleInfo[] {
   return [];
 }
 
+/* 设置读不到时的占位：区分「还在读」与「读失败了」。
+ * 失败必须给出原因和重来的入口 —— 一个永远转不完的「正在读取…」
+ * 既不可解释也无法自救，正是 07 章要消灭的那种黑盒。 */
+function SettingsPlaceholder({ error, onRetry }: { error: string | null; onRetry: () => void }) {
+  if (!error) return <div className="col-empty">正在读取设置…</div>;
+  return (
+    <div className="col-empty">
+      <div>读取设置失败</div>
+      <div className="hint-dim" style={{ margin: "6px 0 10px" }}>{error}</div>
+      <button className="btn btn-sm" onClick={onRetry}>重试</button>
+    </div>
+  );
+}
+
 export function Settings() {
   const { client, nav, toast } = useApp();
 
   const [tab, setTab] = useState<TabId>("general");
   const [draft, setDraft] = useState<EngineSettings | null>(null);
+  const [settingsErr, setSettingsErr] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -79,10 +95,16 @@ export function Settings() {
   const [versions, setVersions] = useState<{ app: string; electron: string; chrome: string; node: string } | null>(null);
 
   const loadSettings = useCallback(async () => {
+    setSettingsErr(null);
     try {
       setDraft(await client.getJson<EngineSettings>("/settings"));
       setDirty(false);
-    } catch {
+    } catch (err) {
+      /* 只弹一次 toast 是不够的：draft 会一直是 null，两个 Tab 就永远停在
+         「正在读取设置…」，用户既不知道发生了什么也没有重来的入口。
+         把原因留在页面上，并给一个重试按钮。 */
+      const reason = err instanceof ApiError ? (err.userMessage ?? err.message) : String(err);
+      setSettingsErr(reason);
       toast("读取设置失败", "err");
     }
   }, [client, toast]);
@@ -183,7 +205,7 @@ export function Settings() {
         {tab === "general" && (
           <section className="settings-pane">
             {!draft ? (
-              <div className="col-empty">正在读取设置…</div>
+              <SettingsPlaceholder error={settingsErr} onRetry={() => void loadSettings()} />
             ) : (
               <>
                 <div className="field-row">
@@ -251,7 +273,7 @@ export function Settings() {
         {tab === "advanced" && (
           <section className="settings-pane">
             {!draft ? (
-              <div className="col-empty">正在读取设置…</div>
+              <SettingsPlaceholder error={settingsErr} onRetry={() => void loadSettings()} />
             ) : (
               <>
                 <div className="field-row">

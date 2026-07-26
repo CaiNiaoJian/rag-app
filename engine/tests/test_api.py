@@ -310,3 +310,47 @@ def test_dashboard_shape(client, db: Database):
                 "fail_top", "duration", "trend"):
         assert key in body, f"仪表盘缺少 {key}"
     assert body["cards"]
+
+
+# ---------------------------------------------------------------- CORS
+
+
+@pytest.mark.parametrize("origin", [
+    "null",                       # 生产：页面来自 file://，Origin 头就是字符串 null
+    "file:///C:/app/index.html",
+    "http://127.0.0.1:5173",      # 开发：vite dev server
+    "http://localhost:5173",
+])
+def test_preflight_allows_local_origins(anon_client, origin: str):
+    """渲染进程与引擎不同源，带 Authorization 的请求会先发 OPTIONS 预检。
+
+    这条路径断过一次：没有 CORS 应答时浏览器把所有请求拦在本地，引擎侧连一行日志
+    都看不到，UI 表现为「一直卡在读取设置」——最难查的那种故障。
+    预检本身不带凭据，必须在鉴权之前被应答（中间件顺序）。
+    """
+    res = anon_client.options("/settings", headers={
+        "Origin": origin,
+        "Access-Control-Request-Method": "GET",
+        "Access-Control-Request-Headers": "authorization",
+    })
+    assert res.status_code == 200, f"预检被拒：{res.status_code}"
+    assert res.headers.get("access-control-allow-origin") == origin
+    allowed = res.headers.get("access-control-allow-headers", "").lower()
+    assert "authorization" in allowed
+
+
+def test_actual_request_carries_cors_header(client, token: str):
+    res = client.get("/settings", headers={"Origin": "http://127.0.0.1:5173"})
+    assert res.status_code == 200
+    assert res.headers.get("access-control-allow-origin") == "http://127.0.0.1:5173"
+
+
+@pytest.mark.parametrize("origin", ["http://evil.example.com", "https://10.0.0.5:8080"])
+def test_foreign_origins_not_allowed(anon_client, origin: str):
+    """来源仍收紧到回环与 file://：本机其他网页即便拿到 token 也不该获得跨源读取能力。"""
+    res = anon_client.options("/settings", headers={
+        "Origin": origin,
+        "Access-Control-Request-Method": "GET",
+        "Access-Control-Request-Headers": "authorization",
+    })
+    assert res.headers.get("access-control-allow-origin") != origin

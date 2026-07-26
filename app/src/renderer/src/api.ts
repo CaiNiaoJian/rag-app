@@ -66,8 +66,17 @@ export class EngineClient {
       throw new ApiError(0, null, "运行环境缺少本地引擎桥接");
     }
     const deadline = Date.now() + READY_TIMEOUT_MS;
+    let last = "（未取到状态）";
     for (;;) {
-      const info = await window.df.engine.getInfo();
+      let info: DfEngineInfo;
+      try {
+        info = await window.df.engine.getInfo();
+      } catch (err) {
+        // IPC 本身失败（主进程未注册 handler / 通道名不一致）：这类问题不会自愈，
+        // 继续轮询只是把它拖成一次「超时」，反而掩盖了真正的原因
+        throw new ApiError(0, null, `无法向主进程查询引擎状态：${String(err)}`);
+      }
+      last = `status=${info?.status} port=${info?.port}`;
       // 这里不复用 isUsable：它是 type predicate，会把 else 分支收窄成 never
       if (info.status === "ready" && info.port > 0) {
         this.info = info;
@@ -77,7 +86,12 @@ export class EngineClient {
         throw new ApiError(0, null, "本地引擎未运行，可在顶栏重启引擎");
       }
       if (Date.now() >= deadline) {
-        throw new ApiError(0, null, "本地引擎启动超时");
+        // 把最后看到的状态带进消息：卡住时这一句就是唯一的线索来源，
+        // 光说「超时」等于让人重新从头查一遍。
+        // 同时打进 console —— 主进程会把 renderer 的 warn/error 转进日志与诊断包
+        const msg = `本地引擎启动超时（最后状态：${last}）`;
+        console.error(`[EngineClient] ${msg}`);
+        throw new ApiError(0, null, msg);
       }
       await sleep(READY_POLL_MS);
     }

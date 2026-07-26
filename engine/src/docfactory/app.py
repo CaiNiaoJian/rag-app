@@ -19,6 +19,7 @@ from collections.abc import Callable
 from typing import Any
 
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from loguru import logger
 
@@ -30,6 +31,18 @@ from docfactory.scheduler import Scheduler
 
 # 免鉴权路径（仅存活探测；不返回任何用户数据）
 _PUBLIC_PATHS = frozenset({"/health"})
+
+# 允许的浏览器来源（CORS）。
+#
+# 为什么需要它：渲染进程与引擎**不是同源** —— 生产下页面来自 file://（Origin: null），
+# 开发下来自 vite dev server（127.0.0.1:5173），而引擎在另一个随机端口。带
+# Authorization 头的请求属于「非简单请求」，浏览器会先发 OPTIONS 预检；没有 CORS
+# 应答，所有请求都会被浏览器自己拦掉，引擎侧连日志都看不到一条。
+#
+# 这不会削弱安全边界：真正的边界是「只绑 127.0.0.1」+「每次启动随机的 Bearer token」，
+# CORS 只是浏览器侧的策略。这里仍然把来源收紧到回环与 file://，不用通配符 —— 万一
+# 本机有其他网页拿到了 token，也不该顺手获得跨源读取的能力。
+_ALLOWED_ORIGIN_RE = r"^(null|file://.*|https?://(127\.0\.0\.1|localhost|\[::1\])(:\d+)?)$"
 
 # 路由模块挂载表（模块名 → 说明，仅用于缺失时的日志）
 _ROUTE_MODULES: list[tuple[str, str]] = [
@@ -125,6 +138,17 @@ def create_app(
             if scheme.lower() != "bearer" or not _token_eq(presented.strip(), token):
                 return JSONResponse(status_code=401, content={"error": "unauthorized"})
         return await call_next(request)
+
+    # CORS 必须在 _auth **之后**添加：Starlette 逆序应用中间件，后添加的在最外层，
+    # 这样 OPTIONS 预检会被 CORS 直接应答，而不会先撞上鉴权的 401（预检不带凭据头）。
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origin_regex=_ALLOWED_ORIGIN_RE,
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type", "Accept"],
+        max_age=600,
+    )
 
     @app.exception_handler(DocFactoryError)
     async def _on_business_error(_: Request, exc: DocFactoryError) -> JSONResponse:

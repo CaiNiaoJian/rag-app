@@ -170,6 +170,18 @@ async function createWindow(): Promise<void> {
   win.webContents.on("did-fail-load", (_event, code, description, url) => {
     log.error(`页面加载失败：${url} → ${code} ${description}`);
   });
+
+  /* 渲染进程的 console 转进主日志。
+   * 没有它，UI 侧出问题时诊断包里一片空白 —— 用户只能描述「卡住了」，
+   * 而真正的原因（某个请求被拒、某个 Promise 挂着）全留在没人打开的 DevTools 里。
+   * 只收 warn 及以上：info/debug 量大且多为 React 与 Vite 的噪声。 */
+  win.webContents.on("console-message", (details) => {
+    if (details.level !== "warning" && details.level !== "error") return;
+    const where = details.sourceId ? ` (${details.sourceId}:${details.lineNumber})` : "";
+    const line = `[renderer] ${details.message}${where}`;
+    if (details.level === "error") log.error(line);
+    else log.warn(line);
+  });
   // 页面每次加载完成都补发一次当前引擎状态：渲染层订阅时机可能晚于状态变化
   win.webContents.on("did-finish-load", () => {
     win.webContents.send(CHANNELS.engineStatus, supervisor.getInfo());
