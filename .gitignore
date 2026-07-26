@@ -1,0 +1,15 @@
+# 编辑器/插件本地配置
+.cursor/
+.vscode/
+.idea/
+
+# 依赖与构建产物（预留）
+node_modules/
+dist/
+build/
+__pycache__/
+*.pyc
+.venv/
+
+# 本地数据
+*.log
