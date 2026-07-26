@@ -7,9 +7,15 @@
 node_modules/
 dist/
 build/
+out/
 __pycache__/
 *.pyc
 .venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
 
 # 本地数据
 *.log
+corpus/report.md
+corpus/samples/
