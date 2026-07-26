@@ -7,8 +7,9 @@ runner 负责：干活、调用 ctx.progress() 上报页粒度进度、在检查
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Callable, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
     from docfactory.config import Paths, Settings
@@ -28,9 +29,9 @@ EVENT_FAILED = "failed"              # {error_code, user_message, suggestion}
 
 @dataclass
 class TaskContext:
-    db: "Database"
-    paths: "Paths"
-    settings: "Settings"
+    db: Database
+    paths: Paths
+    settings: Settings
     task_id: str
     doc_id: str | None
     payload: dict[str, Any]

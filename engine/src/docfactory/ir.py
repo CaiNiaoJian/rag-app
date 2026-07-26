@@ -7,8 +7,9 @@ minor 版本只增字段（向后兼容读取）；major 破坏性变更需评�
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, Iterator, Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -146,7 +147,7 @@ class IRDocument(BaseModel):
         )
 
     @classmethod
-    def load(cls, path: Path) -> "IRDocument":
+    def load(cls, path: Path) -> IRDocument:
         return cls.model_validate_json(path.read_text(encoding="utf-8"))
 
 
