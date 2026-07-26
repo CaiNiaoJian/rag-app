@@ -45,10 +45,31 @@ def _retention(files: list[str]) -> None:
                 os.remove(f)
 
 
+def _is_disconnect_noise(record: logging.LogRecord) -> bool:
+    """识别 Windows ProactorEventLoop 的客户端断连噪声。
+
+    UI 每次收完 SSE 就主动断开（任务完成、切页面、关窗口都会），asyncio 直到关闭
+    传输时才发现连接已重置，于是抛 ConnectionResetError 并以 **ERROR** 级别记一条
+    `Exception in callback _ProactorBasePipeTransport._call_connection_lost()`。
+    这是完全正常的断连，却是高频事件 —— 放任它进日志，用户在诊断包与日志查看器里
+    会看到一片红色假故障，「失败可解释」这个卖点就先被自己的日志毁掉了。
+    降级为 DEBUG（低于 sink 的 INFO 门槛，等于不落盘），但不直接丢弃：
+    真要排查断连时把 sink 调到 DEBUG 仍然看得到。
+    """
+    if record.name != "asyncio" or record.levelno < logging.ERROR:
+        return False
+    exc_type = record.exc_info[0] if record.exc_info else None
+    if exc_type is not None and not issubclass(exc_type, ConnectionError):
+        return False
+    return "_call_connection_lost" in record.getMessage()
+
+
 class InterceptHandler(logging.Handler):
     """把标准 logging 记录转发进 loguru（loguru 官方配方，保留调用点与异常栈）。"""
 
     def emit(self, record: logging.LogRecord) -> None:
+        if _is_disconnect_noise(record):
+            record.levelname, record.levelno = "DEBUG", logging.DEBUG
         try:
             level: str | int = logger.level(record.levelname).name
         except ValueError:

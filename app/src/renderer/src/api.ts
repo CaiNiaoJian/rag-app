@@ -3,7 +3,19 @@
  * - 所有请求带 Authorization: Bearer；仅访问 127.0.0.1 回环（离线约束）。
  * - SSE 用 fetch + ReadableStream 手写解析（event:/data: 行）；断线自动放弃，
  *   由页面的定时轮询兜底（进度条降级为 5s 粒度，不弹错）。
+ *
+ * **启动竞态**：窗口先于引擎就绪（引擎要跑迁移与自检，实测约 2s），而六个页面在
+ * mount 那一刻就开始拉数据。若此时拿 status="starting" 的 port=0 去拼 URL，请求
+ * 会被 net-guard 正确拦成非白名单地址，页面停在「读取失败」且不会自愈 ——
+ * 所以 base() 必须**等引擎就绪**而不是拿当前值就走。等待收敛在这一处，
+ * 六个页面与后续所有调用点都不必各自处理，引擎重启换端口时同样受益。
  */
+
+/** 等待引擎就绪的上限：主进程侧启动超时是 15s，这里留一点余量 */
+const READY_TIMEOUT_MS = 20_000;
+const READY_POLL_MS = 150;
+
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 export class ApiError extends Error {
   status: number;
@@ -34,17 +46,52 @@ export type SseHandlers = Partial<Record<string, (data: Record<string, unknown>)
 
 export class EngineClient {
   private info: DfEngineInfo | null = null;
+  /* 并发等待去重：首屏六个页面同时发请求时只跑一轮轮询，而不是六轮 */
+  private pending: Promise<DfEngineInfo> | null = null;
 
   /* 引擎状态变化（含重启换端口/换 token）后由 App 调用作废缓存 */
   invalidate(): void {
     this.info = null;
   }
 
-  private async base(): Promise<{ url: string; token: string }> {
-    if (!this.info || this.info.status !== "ready" || !this.info.port) {
-      this.info = await window.df.engine.getInfo();
+  private static isUsable(info: DfEngineInfo | null): info is DfEngineInfo {
+    return info !== null && info.status === "ready" && info.port > 0;
+  }
+
+  /* 轮询到引擎就绪。status="down" 直接失败：supervisor 重启期间是 "starting"，
+   * 停在 "down" 意味着它已经放弃重试，再等下去只是让用户干等满超时。 */
+  private async waitForReady(): Promise<DfEngineInfo> {
+    if (typeof window.df === "undefined") {
+      // renderer 被单独在浏览器里打开（无 preload）时给出可诊断的说法，而不是 TypeError
+      throw new ApiError(0, null, "运行环境缺少本地引擎桥接");
     }
-    return { url: `http://127.0.0.1:${this.info.port}`, token: this.info.token };
+    const deadline = Date.now() + READY_TIMEOUT_MS;
+    for (;;) {
+      const info = await window.df.engine.getInfo();
+      // 这里不复用 isUsable：它是 type predicate，会把 else 分支收窄成 never
+      if (info.status === "ready" && info.port > 0) {
+        this.info = info;
+        return info;
+      }
+      if (info.status === "down") {
+        throw new ApiError(0, null, "本地引擎未运行，可在顶栏重启引擎");
+      }
+      if (Date.now() >= deadline) {
+        throw new ApiError(0, null, "本地引擎启动超时");
+      }
+      await sleep(READY_POLL_MS);
+    }
+  }
+
+  private async base(): Promise<{ url: string; token: string }> {
+    let info = this.info;
+    if (!EngineClient.isUsable(info)) {
+      this.pending ??= this.waitForReady().finally(() => {
+        this.pending = null;
+      });
+      info = await this.pending;
+    }
+    return { url: `http://127.0.0.1:${info.port}`, token: info.token };
   }
 
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
