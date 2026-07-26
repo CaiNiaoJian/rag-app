@@ -1,0 +1,6 @@
+{
+  "sample": "corrupt.docx",
+  "note": "字节是 zip 但内部不是 OOXML：必须 E01 明确报错，不崩溃（NFR 优雅报错率 100%）",
+  "must_not_fail": false,
+  "expect_error_code": "E01"
+}

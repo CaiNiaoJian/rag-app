@@ -1,0 +1,30 @@
+{
+  "sample": "slides.pptx",
+  "note": "两页 PPT：标题 + 正文 + 演讲者备注 + 表格，验证 slide 节点与 notes 并入",
+  "must_not_fail": true,
+  "max_seconds": 10,
+  "expect": {
+    "node_counts": {
+      "slide": 2
+    },
+    "headings": [
+      "季度经营回顾",
+      "区域分布"
+    ],
+    "text_contains": [
+      "营收同比增长 23%",
+      "此处强调增长主要来自政企客户",
+      "华东"
+    ],
+    "tables": [
+      {
+        "rows": 3,
+        "cols": 2,
+        "cells_contain": [
+          "区域",
+          "占比"
+        ]
+      }
+    ]
+  }
+}

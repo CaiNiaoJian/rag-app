@@ -1,0 +1,13 @@
+{
+  "sample": "text_document.pdf",
+  "note": "两页数字 PDF（有文本层）：验证文本覆盖率门禁与标题启发式。内容语言取决于系统中文字体是否可用，故不断言具体文本。paragraph 期望 2 = L1(pdfplumber) 把每页连续正文聚合为一段的现状；M2 接入 L0 版面分析后应细化到真实段落粒度，届时把这个下限调高。",
+  "must_not_fail": true,
+  "min_text_coverage": 0.97,
+  "max_seconds": 30,
+  "expect": {
+    "node_counts": {
+      "section": 2,
+      "paragraph": 2
+    }
+  }
+}

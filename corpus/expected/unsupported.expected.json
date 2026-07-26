@@ -1,0 +1,6 @@
+{
+  "sample": "unsupported.txt",
+  "note": "非支持格式：应在格式路由阶段就报 E03（导入时 probe_file 也会挡一道）",
+  "must_not_fail": false,
+  "expect_error_code": "E03"
+}

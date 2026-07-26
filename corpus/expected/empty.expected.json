@@ -1,0 +1,6 @@
+{
+  "sample": "empty.docx",
+  "note": "几乎空的文档：必须走 E05「未能提取到有效内容」的优雅报错，而不是产出空 IR 或崩溃",
+  "must_not_fail": false,
+  "expect_error_code": "E05"
+}

@@ -1,0 +1,27 @@
+{
+  "sample": "merged_table.docx",
+  "note": "含横向合并单元格的表格：解析器最容易丢的一类结构（03 章 §7 取值归左上格）",
+  "must_not_fail": true,
+  "max_seconds": 10,
+  "expect": {
+    "node_counts": {
+      "table": 1
+    },
+    "text_contains": [
+      "以上金额均为含税价"
+    ],
+    "tables": [
+      {
+        "rows": 4,
+        "cols": 3,
+        "has_merged": true,
+        "cells_contain": [
+          "项目",
+          "金额",
+          "服务器",
+          "138000"
+        ]
+      }
+    ]
+  }
+}

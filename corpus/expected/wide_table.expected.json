@@ -1,0 +1,26 @@
+{
+  "sample": "wide_table.xlsx",
+  "note": "600 行数据区：验证 sheet_region 完整抽取，切片层应按行组切分并复制表头",
+  "must_not_fail": true,
+  "max_seconds": 20,
+  "expect": {
+    "node_counts": {
+      "sheet": 1,
+      "sheet_region": 1
+    },
+    "text_contains": [
+      "流水",
+      "客户"
+    ],
+    "tables": [
+      {
+        "rows": 100,
+        "cols": 6,
+        "cells_contain": [
+          "序号",
+          "金额"
+        ]
+      }
+    ]
+  }
+}
