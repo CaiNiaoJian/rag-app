@@ -1,0 +1,9 @@
+{
+  /* 根配置只做工程引用聚合：主进程/preload 与渲染进程的 lib、types 完全不同
+   * （前者要 Node + Electron，后者是沙箱浏览器环境），必须分成两个独立 program。
+   * 实际门禁走 package.json 的 typecheck：
+   *   tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json
+   * 因此这里不能开 composite（--noEmit 与 composite 互斥）。 */
+  "files": [],
+  "references": [{ "path": "./tsconfig.node.json" }, { "path": "./tsconfig.web.json" }]
+}

@@ -1,0 +1,25 @@
+{
+  /* 渲染进程（sandbox + contextIsolation 的浏览器环境）。
+   * 刻意不引入 @types/node：渲染层拿不到任何 Node 能力，一切经 window.df，
+   * 类型层面先把 process/require/Buffer 这类误用挡住（02 章 §7）。 */
+  "include": ["src/renderer/src/env.d.ts", "src/renderer/src/**/*.ts", "src/renderer/src/**/*.tsx"],
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "types": ["vite/client"],
+    "noEmit": true,
+    "strict": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "useDefineForClassFields": true
+  }
+}
