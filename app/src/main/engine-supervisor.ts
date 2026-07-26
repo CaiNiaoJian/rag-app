@@ -152,6 +152,12 @@ export class EngineSupervisor {
     log.info("收到重启引擎请求");
     this.restarts = [];
     await this.stop();
+    /* stop() 只等到子进程退出，此时上一轮 launch() 的 promise 可能还没收尾；
+     * 不等它就直接 start()，会命中 start() 里的「已有启动在飞」分支，把那个注定
+     * 失败的 promise 当成本次重启的结果返回 —— 表现为用户点了「重试」却没反应。
+     * 等它（无论成败）落地后 this.starting 必为 null，再真正拉起新进程。 */
+    const pending = this.starting;
+    if (pending) await pending.catch(() => undefined);
     await this.start();
   }
 
@@ -269,9 +275,10 @@ export class EngineSupervisor {
       log.info(`引擎就绪：127.0.0.1:${port}`);
       return this.getInfo();
     } catch (err) {
-      // 启动失败的半死进程必须清掉，否则端口与 soffice 都会泄漏
+      // 启动失败的半死进程必须清掉，否则端口与 soffice 都会泄漏；
+      // 已经退出的就别再 taskkill：既省一条误导性 warn，也避免 pid 复用误伤别的进程
       if (this.child === child) this.child = null;
-      killProcessTree(child.pid);
+      if (child.exitCode === null && child.signalCode === null) killProcessTree(child.pid);
       return this.fail(String(err instanceof Error ? err.message : err));
     }
   }
@@ -372,6 +379,11 @@ export class EngineSupervisor {
 
     log.warn(`引擎意外退出（code=${code} signal=${signal}）`);
     this.update({ status: "down", port: 0 });
+
+    /* 启动期就崩了：launch() 自己的失败路径会置 down 并记 E06，这里再走一遍配额
+     * 只会白白吃掉一次重启额度（而且 start() 会撞上在飞的 launch 直接返回，实际
+     * 并不会拉起新进程）。留给 UI 的「重试」处理。 */
+    if (this.starting) return;
 
     // 正常退出码 0 视为引擎自行收尾（例如被外部 /shutdown），不自动拉起
     if (code === 0) return;

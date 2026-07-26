@@ -134,12 +134,22 @@ export function installNetGuard(ses: Session, opts: NetGuardOptions): void {
     callback({ responseHeaders: headers });
   });
 
-  // 一切设备/系统权限一律拒绝：本产品不需要摄像头、麦克风、定位、通知、剪贴板读
+  /* 设备/系统权限默认全拒（摄像头、麦克风、定位、通知、剪贴板**读**……本产品都不需要）。
+   * 唯一放行 clipboard-sanitized-write：07 章的「复制切片/复制错误详情」按钮走
+   * navigator.clipboard.writeText，全拒会让它抛 NotAllowedError，只能退到
+   * document.execCommand("copy") 那条已废弃的兜底路径上。该权限只是「往系统剪贴板写
+   * 经过消毒的内容」，既不读剪贴板也不碰网络，放行不削弱离线与隐私约束。 */
+  const ALLOWED_PERMISSIONS = new Set<string>(["clipboard-sanitized-write"]);
+
   ses.setPermissionRequestHandler((_wc, permission, callback) => {
+    if (ALLOWED_PERMISSIONS.has(permission)) {
+      callback(true);
+      return;
+    }
     log.warn(`[net-guard] 已拒绝权限请求：${permission}`);
     callback(false);
   });
-  ses.setPermissionCheckHandler(() => false);
+  ses.setPermissionCheckHandler((_wc, permission) => ALLOWED_PERMISSIONS.has(permission));
   ses.setDevicePermissionHandler(() => false);
 
   // 拼写检查会向 Google 下载词典（02 章 §7 明令禁用）
@@ -207,8 +217,13 @@ export function disableChromiumNetworkFeatures(): void {
         "SafeBrowsing",
       ].join(","),
     ],
-    // 最后一道保险：除回环外的域名解析直接 NOTFOUND（我们只用 127.0.0.1 字面量）
-    ["host-resolver-rules", "MAP * ~NOTFOUND , EXCLUDE localhost"],
+    /* 最后一道保险：除回环外的域名解析直接 NOTFOUND。
+     * `MAP *` 会连 IP 字面量一起改写（Chromium 的 HostMappingRules 是按 host 字符串
+     * 做 MatchPattern，不区分域名与字面量），所以 127.0.0.1 / ::1 必须显式 EXCLUDE，
+     * 否则渲染进程 fetch("http://127.0.0.1:port") 会直接 ERR_NAME_NOT_RESOLVED，
+     * 开发期连 dev server 页面本身都加载不出来。实测：只写 EXCLUDE localhost 时
+     * 回环字面量被拦，补上下面两条后回环通、外部域名仍解析失败。 */
+    ["host-resolver-rules", "MAP * ~NOTFOUND , EXCLUDE localhost , EXCLUDE 127.0.0.1 , EXCLUDE ::1"],
   ];
   for (const [name, value] of switches) {
     if (value === undefined) app.commandLine.appendSwitch(name);

@@ -181,6 +181,8 @@ async function packLocally(dataRoot: string): Promise<string | null> {
 
   const zipPath = join(staging, `DocFactory-诊断包-${timestamp()}.zip`);
   const ok = await compressWithPowerShell(staging, zipPath);
+  // 压缩失败时调用方拿到 null 就直接抛错了，暂存目录没人再来收 —— 就地清掉
+  if (!ok) await rm(staging, { recursive: true, force: true }).catch(() => undefined);
   return ok ? zipPath : null;
 }
 

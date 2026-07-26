@@ -48,10 +48,15 @@ const MAX_DEPTH = 8;
 const MAX_FILES = 5000;
 /** readText 单文件上限：IR/MD 再大也不该整份塞进渲染进程 */
 const MAX_READ_BYTES = 64 * 1024 * 1024;
-/** shell.openPath 拒绝直接拉起的可执行类型 */
+/* shell.openPath 拒绝直接拉起的类型。
+ * 不止「可执行文件」：Windows 上一批看着人畜无害的壳类型（.url/.scf/.settingcontent-ms
+ * 等）经资源管理器打开同样能起进程或拉起任意命令，一并列进来。 */
 const EXECUTABLE_EXTS = new Set([
   "exe", "com", "bat", "cmd", "ps1", "psm1", "vbs", "vbe", "js", "jse", "wsf", "wsh",
   "msi", "msp", "scr", "cpl", "reg", "hta", "lnk", "pif", "jar",
+  "url", "website", "scf", "msc", "chm", "inf", "sct", "ws", "wsc", "application",
+  "gadget", "appref-ms", "settingcontent-ms", "library-ms", "search-ms",
+  "msix", "appx", "iso", "vhd", "vhdx",
 ]);
 
 export interface IpcDeps {
