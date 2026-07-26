@@ -277,6 +277,9 @@ export function App() {
               key={it.id}
               className={`sidebar-item ${page === it.id ? "sidebar-item-active" : ""}`}
               onClick={() => navigate(it.id)}
+              /* 稳定选择器：截图工具与将来的 UI 自动化都靠它选页，
+                 不必去猜会随文案变的中文 title */
+              data-page={it.id}
               title={PAGE_TITLES[it.id]}
               aria-current={page === it.id ? "page" : undefined}
             >

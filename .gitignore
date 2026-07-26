@@ -25,3 +25,6 @@ corpus/samples/
 
 # CI 生成的发布产物（随包分发，不入库）
 engine/THIRD-PARTY-NOTICES.txt
+
+# UI 截图工具的产物（视觉回归用，本地生成不入库）
+app/.ui-shots/

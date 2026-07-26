@@ -17,11 +17,25 @@ import { EmptyState } from "../components/EmptyState";
 import type { DashboardStats } from "../types";
 import { fmtMs, fmtPct } from "../util";
 
-const BRAND = "#2467E5";
-const OK = "#1E9E5A";
-const WARN = "#D98B12";
-const ERR = "#D0453B";
-const NEUTRAL = ["#2467E5", "#5B8DEF", "#8FB2F5", "#B9CDF9", "#95A3B8", "#C3CBD6"];
+/* 图表色必须与 styles.css 的令牌同值 —— SVG 里没法用 var()，只能手动同步。
+ * 全部写成 oklch()：与令牌逐字符对得上，将来改色相只需要两处一起改。
+ * 分类色不是「六个好看的颜色」，而是同一色相上的明度阶梯 + 两档中性收尾：
+ * 类别本身没有语义差别（pdf 不比 docx「更重要」），用色相区分反而在暗示优先级。 */
+const BRAND = "oklch(0.545 0.176 265)";
+const OK = "oklch(0.58 0.125 152)";
+const WARN = "oklch(0.66 0.13 72)";
+const ERR = "oklch(0.575 0.165 24)";
+const NEUTRAL = [
+  "oklch(0.545 0.176 265)",
+  "oklch(0.635 0.145 265)",
+  "oklch(0.725 0.105 265)",
+  "oklch(0.815 0.065 265)",
+  "oklch(0.70 0.02 265)",
+  "oklch(0.82 0.012 265)",
+];
+/* 图表里的轨道与基线：与 --surface-sunken / --line 同值 */
+const TRACK = "oklch(0.948 0.007 265)";
+const AXIS = "oklch(0.906 0.008 265)";
 
 interface Pair {
   /* 业务键（E01 / L0 / pdf …）：跳转与取数用 */
@@ -120,7 +134,7 @@ function Donut({ segments, centerValue, centerLabel }: {
   return (
     <div className="chart-donut">
       <svg viewBox="0 0 120 120" width="132" height="132" role="img" aria-label={centerLabel}>
-        <circle cx="60" cy="60" r={r} fill="none" stroke="#EDF1F6" strokeWidth="14" />
+        <circle cx="60" cy="60" r={r} fill="none" stroke={TRACK} strokeWidth="14" />
         {total > 0 &&
           segments.map((s) => {
             const len = (s.value / total) * c;
@@ -282,7 +296,7 @@ function TrendLine({ series, labels }: {
   return (
     <div className="chart-trend">
       <svg viewBox={`0 0 ${w} ${h}`} width="100%" height={h} role="img" aria-label="趋势">
-        <line x1="0" y1={h - 4} x2={w} y2={h - 4} stroke="#E6EAF0" />
+        <line x1="0" y1={h - 4} x2={w} y2={h - 4} stroke={AXIS} />
         {usable.map((s) => (
           <polyline
             key={s.name}
@@ -341,9 +355,19 @@ function BarList({ items, onPick, valueFmt }: {
   );
 }
 
-function Card({ title, value, sub, tone }: { title: string; value: string; sub?: string; tone?: "ok" | "warn" | "err" }) {
+/* hero=true 的卡片占双倍宽度、数字更大。
+ * 留这个开关是因为等宽平铺会把「解析出的内容完不完整」和「一共导了几个文件」
+ * 摆成同等重量，而完整性量化才是本产品的差异化打法（01 章 §1.1）——
+ * 仪表盘第一眼该落在它上面。 */
+function Card({ title, value, sub, tone, hero }: {
+  title: string;
+  value: string;
+  sub?: string;
+  tone?: "ok" | "warn" | "err";
+  hero?: boolean;
+}) {
   return (
-    <div className="stat-card">
+    <div className={`stat-card ${hero ? "stat-card-hero" : ""}`}>
       <div className="stat-title">{title}</div>
       <div className={`stat-value ${tone ? `stat-${tone}` : ""}`}>{value}</div>
       {sub && <div className="stat-sub">{sub}</div>}
@@ -381,7 +405,14 @@ export function Dashboard() {
     const fmtPairs = toPairs(stats?.fmt_dist);
     const histPairs = toPairs(stats?.chunk_hist);
     const failPairs = toPairs(stats?.fail_top).sort((a, b) => b.value - a.value).slice(0, 5);
-    const durPairs = toPairs(stats?.duration);
+    /* 耗时是唯一一个「带元信息」的聚合：引擎给的是 {by_type: [{label, value, samples}]}，
+       value 是平均毫秒、samples 是样本数。直接丢给 toPairs 会走对象分支，
+       而 by_type 的值是数组不是数字，于是被过滤成空 —— 面板恒显示「暂无数据」。
+       先拆出 by_type，再退回裸对象/数组两种旧形状。 */
+    const durationRaw = stats?.duration as Record<string, unknown> | undefined;
+    const durPairs = toPairs(
+      durationRaw && Array.isArray(durationRaw["by_type"]) ? durationRaw["by_type"] : stats?.duration,
+    );
 
     const ok = pick(statusPairs, "ok", "success");
     const warn = pick(statusPairs, "warning", "warn");
@@ -454,7 +485,8 @@ export function Dashboard() {
         <Card
           title="平均文本覆盖率"
           value={avgCoverage !== null ? fmtPct(avgCoverage, 1) : "—"}
-          sub="解析出的文字占原文的比例"
+          sub="解析出的文字占原文的比例 · 越高说明内容丢得越少"
+          hero
         />
         <Card title="切片总数" value={String(chunkTotal)} sub="可直接用于检索的语义块" />
         <Card
