@@ -19,3 +19,9 @@ __pycache__/
 *.log
 corpus/report.md
 corpus/samples/
+
+# 本机开发用数据根目录（DOCFACTORY_DATA_DIR 指向此处）
+.devdata/
+
+# CI 生成的发布产物（随包分发，不入库）
+engine/THIRD-PARTY-NOTICES.txt

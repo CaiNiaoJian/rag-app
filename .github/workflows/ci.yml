@@ -1,0 +1,103 @@
+# CI 门禁（08 章 §2/§3）。
+#
+# 跑在 windows-latest：本产品只发 Windows，路径分隔符、编码、进程树 kill 这些
+# 最容易出问题的地方必须在目标平台上验，Linux 上跑绿灯没有意义。
+#
+# 三道门禁，任一失败即阻断合入：
+#   ① 引擎：ruff → pytest → **许可证红线扫描**（GPL/AGPL 出现即失败，03 章 §6）
+#   ② 桌面端：tsc 类型检查 → electron-vite 构建
+#   ③ 产物体积与 NSIS 出包在 M5 接入（见下方 TODO），M1 先保证前两道
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# 同一分支的新推送取消旧运行：CI 机时不用来跑过时的提交
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  engine:
+    name: 引擎（Python 3.13 / Windows）
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: engine
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: engine/uv.lock
+
+      - name: 同步依赖（锁定版本，含 dev 组）
+        run: uv sync --frozen --dev
+
+      - name: 代码风格与静态检查
+        run: uv run ruff check src/ tests/ scripts/
+
+      - name: 单元测试
+        # 离线闸会拦截非回环连接，测试进程里显式关闭（其行为由 test_offline_guard 用子进程覆盖）
+        env:
+          DOCFACTORY_DISABLE_OFFLINE_GUARD: "1"
+        run: uv run pytest -q
+
+      - name: 进程级冒烟（READY 握手 / 鉴权 / SSE / 全链路 / 优雅退出）
+        # 单测是进程内跑 runner，绕过了真实进程边界；这一步补上握手、Bearer、SSE 三样
+        run: uv run python scripts/smoke_e2e.py
+
+      - name: golden corpus 回归（解析质量门禁）
+        # --generate 造出程序化 fixtures：CI 不依赖任何入库的真实语料就能跑最小回归集
+        run: uv run python ../corpus/run_corpus.py --generate --report ../corpus/report.md
+
+      - name: 上传 corpus 报告
+        if: always() # 失败时更需要看报告
+        uses: actions/upload-artifact@v4
+        with:
+          name: corpus-report
+          path: corpus/report.md
+
+      - name: 许可证红线扫描（GPL/AGPL 即阻断）
+        run: uv run python scripts/license_scan.py --notices THIRD-PARTY-NOTICES.txt
+
+      - name: 上传第三方许可声明
+        uses: actions/upload-artifact@v4
+        with:
+          name: third-party-notices
+          path: engine/THIRD-PARTY-NOTICES.txt
+
+  desktop:
+    name: 桌面端（Node 24 / Windows）
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 类型检查
+        run: npm run typecheck
+
+      - name: 构建（main / preload / renderer 三段）
+        run: npm run build
+
+      # TODO(M5)：接入 NSIS 出包与体积门禁 ——
+      #   1) 先跑 PyInstaller onedir 产出 engine.exe，放进 app/resources/engine/
+      #   2) npm run dist 出 NSIS 安装包
+      #   3) 校验安装包体积 ≤ 2GB（08 章 §2 体积清单）
+      #   4) 代码签名（证书走 GitHub Secrets，不入库）
