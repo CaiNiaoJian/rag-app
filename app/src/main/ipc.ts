@@ -23,6 +23,7 @@ import log from "electron-log/main";
 
 import { exportDiagnosticsZip } from "./diagnostics";
 import type { EngineSupervisor } from "./engine-supervisor";
+import { checkForUpdates, openDownloadPage } from "./update-checker";
 
 /** 通道名（与 preload 一一对应） */
 export const CHANNELS = {
@@ -41,6 +42,8 @@ export const CHANNELS = {
   pdfPrintHtmlToPdf: "df:pdf:print-html-to-pdf",
   diagnosticsExportZip: "df:diagnostics:export-zip",
   appVersions: "df:app:versions",
+  updateCheck: "df:update:check",
+  updateOpenDownload: "df:update:open-download",
 } as const;
 
 /** 与引擎 ingest.SUPPORTED_EXTS 保持一致（七种格式） */
@@ -486,6 +489,13 @@ export function registerIpcHandlers(deps: IpcDeps): void {
       node: process.versions.node,
     }),
   );
+
+  // ---- update ----
+  // 检查与打开下载页都是用户主动动作；出网边界与 URL 白名单见 update-checker.ts
+  ipcMain.handle(CHANNELS.updateCheck, async (): Promise<DfUpdateInfo> => checkForUpdates());
+  ipcMain.handle(CHANNELS.updateOpenDownload, async (_event, url: unknown): Promise<void> => {
+    await openDownloadPage(asString(url, "url"));
+  });
 
   log.info("IPC handlers 已注册");
 }

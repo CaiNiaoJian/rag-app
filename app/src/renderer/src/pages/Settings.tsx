@@ -94,6 +94,10 @@ export function Settings() {
   const [health, setHealth] = useState<HealthInfoEx | null>(null);
   const [versions, setVersions] = useState<{ app: string; electron: string; chrome: string; node: string } | null>(null);
 
+  /* 检查更新：唯一的出网动作，必须由这里的按钮触发（离线纪律见主进程 update-checker.ts） */
+  const [updChecking, setUpdChecking] = useState(false);
+  const [updInfo, setUpdInfo] = useState<DfUpdateInfo | null>(null);
+
   const loadSettings = useCallback(async () => {
     setSettingsErr(null);
     try {
@@ -180,6 +184,20 @@ export function Settings() {
       void loadModules();
     } catch {
       toast("回滚失败，可能上一版本目录已损坏", "err");
+    }
+  };
+
+  const doCheckUpdate = async () => {
+    setUpdChecking(true);
+    try {
+      const r = await window.df.update.check();
+      setUpdInfo(r);
+      if (r.hasUpdate) toast(`发现新版本 v${r.latest}`, "ok");
+    } catch {
+      setUpdInfo(null);
+      toast("检查更新失败", "err");
+    } finally {
+      setUpdChecking(false);
     }
   };
 
@@ -538,6 +556,38 @@ export function Settings() {
             <div className="settings-card">
             <div className="about-title">DocFactory</div>
             <div className="about-sub">Windows 完全离线的 RAG 文档数据工厂</div>
+
+            <div className="field-row">
+              <div className="field-main">
+                <div className="field-title">软件更新</div>
+                <div className="field-desc">
+                  {updChecking
+                    ? "正在向 GitHub 查询最新版本…"
+                    : updInfo === null
+                      ? "手动检查 GitHub 上的最新版本。本应用从不自动联网，只有点击此按钮才会发起这一次查询。"
+                      : updInfo.error
+                        ? `检查未完成：${updInfo.error}`
+                        : updInfo.hasUpdate
+                          ? `发现新版本 v${updInfo.latest}（当前 v${updInfo.current}），点「去下载」在浏览器中获取安装包。`
+                          : `已是最新版本（v${updInfo.current}）。`}
+                </div>
+              </div>
+              {updInfo?.hasUpdate && updInfo.url && (
+                <button
+                  className="btn btn-sm btn-primary"
+                  onClick={() => {
+                    const url = updInfo.url;
+                    if (url) void window.df.update.openDownload(url).catch(() => toast("打开下载页失败", "err"));
+                  }}
+                >
+                  去下载 v{updInfo.latest}
+                </button>
+              )}
+              <button className="btn btn-sm" disabled={updChecking} onClick={() => void doCheckUpdate()}>
+                {updChecking ? "检查中…" : "检查更新"}
+              </button>
+            </div>
+
             <dl className="kv kv-wide">
               <dt>应用版本</dt>
               <dd className="mono">{versions?.app ?? "—"}</dd>

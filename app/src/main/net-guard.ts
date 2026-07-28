@@ -273,11 +273,37 @@ export function disableChromiumNetworkFeatures(): void {
  * 最终都落到它上面 —— 补一处等于把主进程所有出网路径一起收口。
  * DNS 不解析：离线环境里主机名一律视为非回环，不为了判定去发一次查询。
  */
+
+/* 受控临时放行集合：**唯一**的合法写入方是 withRemoteHostsAllowed()。
+ * 默认恒空 —— 应用的一切常规路径仍是「非回环一律拒绝」；只有用户主动触发的
+ * 动作（目前仅「检查更新」）会在动作存续期内放行指定主机，动作结束立即收回。
+ * 这保持了 FR-17 的语义：不存在任何**自动**出网路径，出网必须来自用户当下的点击。 */
+const temporarilyAllowedHosts = new Set<string>();
+
+/**
+ * 在回调存续期内放行指定远程主机（大小写不敏感），结束后无条件收回。
+ * 放行与收回都写日志留痕，供离线审计核对「每一次出网都对应一次用户动作」。
+ */
+export async function withRemoteHostsAllowed<T>(hosts: string[], fn: () => Promise<T>): Promise<T> {
+  const normalized = hosts.map((h) => h.toLowerCase());
+  for (const h of normalized) temporarilyAllowedHosts.add(h);
+  log.info(`[net-guard] 临时放行远程主机（用户动作）：${normalized.join(", ")}`);
+  try {
+    return await fn();
+  } finally {
+    for (const h of normalized) temporarilyAllowedHosts.delete(h);
+    log.info("[net-guard] 已收回临时放行");
+  }
+}
+
 export function installProcessSocketGuard(): void {
   const realConnect = net.Socket.prototype.connect;
 
   const hostAllowed = (host: unknown): boolean =>
-    typeof host !== "string" || host === "" || isLoopbackHost(host);
+    typeof host !== "string" ||
+    host === "" ||
+    isLoopbackHost(host) ||
+    temporarilyAllowedHosts.has(host.toLowerCase());
 
   net.Socket.prototype.connect = function patchedConnect(
     this: net.Socket,

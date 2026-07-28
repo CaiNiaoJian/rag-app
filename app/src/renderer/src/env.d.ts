@@ -20,6 +20,14 @@ declare global {
     supported: boolean;
     isKmod: boolean;
   }
+  interface DfUpdateInfo {
+    current: string;
+    latest: string | null;
+    hasUpdate: boolean;
+    url: string | null;
+    notes: string | null;
+    error: string | null;
+  }
   interface DfApi {
     engine: {
       getInfo(): Promise<DfEngineInfo>;
@@ -49,6 +57,12 @@ declare global {
     };
     appInfo: {
       versions(): Promise<{ app: string; electron: string; chrome: string; node: string }>;
+    };
+    update: {
+      /** 用户主动检查更新（唯一的出网动作，见主进程 update-checker.ts） */
+      check(): Promise<DfUpdateInfo>;
+      /** 用系统浏览器打开 Release 下载页（URL 白名单限定本仓库） */
+      openDownload(url: string): Promise<void>;
     };
   }
   interface Window {

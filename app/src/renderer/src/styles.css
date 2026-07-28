@@ -2270,7 +2270,12 @@ td.col-name > :first-child {
   font-size: var(--fs-3xl);
 }
 
+/* 面板网格吸收页面剩余高度：auto 行在 stretch 下平分多出的空间，
+   窗口再高也不会在网格下方露出一截画布。
+   flex-basis 用 auto 且不允许收缩——内容超过分配高度时网格随内容长高
+   （页面滚动），而不是把面板溢出画到后面的元素上。 */
 .dash-grid {
+  flex: 1 0 auto;
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   gap: 12px;
@@ -2281,6 +2286,17 @@ td.col-name > :first-child {
   border-radius: var(--radius-lg);
   background: var(--surface);
   box-shadow: var(--shadow-xs);
+  display: flex;
+  flex-direction: column;
+}
+/* 面板被网格拉高时，内容垂直居中而不是贴顶悬空 */
+.panel-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
 }
 .panel-wide {
   grid-column: span 2;

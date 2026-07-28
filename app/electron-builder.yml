@@ -85,5 +85,8 @@ electronLanguages:
 npmRebuild: false
 buildDependenciesFromSource: false
 
-# 离线产品：不配置任何 publish provider，避免生成 app-update.yml / latest.yml
+# 离线产品：不配置 publish provider，避免生成 app-update.yml / latest.yml，
+# 也就不存在 electron-updater 的自动下载通道。更新走「用户主动检查」：
+# 设置 → 关于 → 检查更新（主进程 update-checker.ts 查询 GitHub Releases，
+# 发现新版只打开浏览器下载页）；Release 由 CI 的 release job 在推送 v* 标签时发布。
 publish: null

@@ -28,6 +28,8 @@ const CH = {
   pdfPrintHtmlToPdf: "df:pdf:print-html-to-pdf",
   diagnosticsExportZip: "df:diagnostics:export-zip",
   appVersions: "df:app:versions",
+  updateCheck: "df:update:check",
+  updateOpenDownload: "df:update:open-download",
 } as const;
 
 /** 单个路径段的转义：盘符段（"G:"）原样保留，其余按 URI 组件编码（中文/空格/#/?） */
@@ -109,6 +111,11 @@ const api: DfApi = {
         chrome: string;
         node: string;
       }>,
+  },
+
+  update: {
+    check: () => ipcRenderer.invoke(CH.updateCheck) as Promise<DfUpdateInfo>,
+    openDownload: (url) => ipcRenderer.invoke(CH.updateOpenDownload, url) as Promise<void>,
   },
 };
 

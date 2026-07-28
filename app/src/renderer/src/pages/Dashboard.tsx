@@ -135,7 +135,7 @@ function Donut({ segments, centerValue, centerLabel }: {
   let acc = 0;
   return (
     <div className="chart-donut">
-      <svg viewBox="0 0 120 120" width="132" height="132" role="img" aria-label={centerLabel}>
+      <svg viewBox="0 0 120 120" width="140" height="140" role="img" aria-label={centerLabel}>
         <circle cx="60" cy="60" r={r} fill="none" stroke={TRACK} strokeWidth="14" />
         {total > 0 &&
           segments.map((s) => {
@@ -177,6 +177,7 @@ function Donut({ segments, centerValue, centerLabel }: {
 function Pie({ items }: { items: Pair[] }) {
   const total = items.reduce((s, x) => s + x.value, 0);
   if (total <= 0) return <div className="chart-empty">暂无数据</div>;
+  const nonZero = items.filter((x) => x.value > 0);
   let angle = -Math.PI / 2;
   const paths = items.map((it, i) => {
     const sweep = (it.value / total) * Math.PI * 2;
@@ -196,8 +197,13 @@ function Pie({ items }: { items: Pair[] }) {
   });
   return (
     <div className="chart-donut">
-      <svg viewBox="0 0 120 120" width="122" height="122" role="img" aria-label="类型分布">
-        {paths}
+      <svg viewBox="0 0 120 120" width="136" height="136" role="img" aria-label="类型分布">
+        {/* 只有一种类型时扇形起终点重合，arc 画不出来——整圆直接用 circle */}
+        {nonZero.length === 1 ? (
+          <circle cx="60" cy="60" r="50" fill={NEUTRAL[items.indexOf(nonZero[0] as Pair) % NEUTRAL.length]} />
+        ) : (
+          paths
+        )}
       </svg>
       <ul className="legend">
         {items.map((it, i) => (
@@ -246,7 +252,7 @@ function Histogram({ items }: { items: Pair[] }) {
   if (!items.length) return <div className="chart-empty">暂无数据</div>;
   const max = Math.max(...items.map((x) => x.value), 1);
   const w = 300;
-  const h = 96;
+  const h = 110;
   const bw = w / items.length;
   return (
     <div className="chart-hist">
@@ -288,7 +294,7 @@ function TrendLine({ series, labels }: {
   const usable = series.filter((s) => s.points.length > 1);
   if (!usable.length) return <div className="chart-empty">暂无趋势数据</div>;
   const w = 320;
-  const h = 96;
+  const h = 120;
   const max = Math.max(1, ...usable.flatMap((s) => s.points));
   const n = Math.max(...usable.map((s) => s.points.length));
   const xy = (i: number, v: number) => [
@@ -297,8 +303,10 @@ function TrendLine({ series, labels }: {
   ];
   return (
     <div className="chart-trend">
-      <svg viewBox={`0 0 ${w} ${h}`} width="100%" height={h} role="img" aria-label="趋势">
-        <line x1="0" y1={h - 4} x2={w} y2={h - 4} stroke={AXIS} />
+      {/* preserveAspectRatio=none 让折线横向撑满宽面板（默认 meet 会把图形
+          按高度缩放后水平居中，两侧空出一大截）；线宽用 non-scaling-stroke 保持不变形 */}
+      <svg viewBox={`0 0 ${w} ${h}`} width="100%" height={h} preserveAspectRatio="none" role="img" aria-label="趋势">
+        <line x1="0" y1={h - 4} x2={w} y2={h - 4} stroke={AXIS} vectorEffect="non-scaling-stroke" />
         {usable.map((s) => (
           <polyline
             key={s.name}
@@ -307,6 +315,7 @@ function TrendLine({ series, labels }: {
             strokeWidth="1.8"
             strokeLinejoin="round"
             strokeLinecap="round"
+            vectorEffect="non-scaling-stroke"
             points={s.points.map((v, i) => xy(i, v).map((z) => z.toFixed(1)).join(",")).join(" ")}
           />
         ))}
@@ -499,69 +508,85 @@ export function Dashboard() {
       </div>
 
       <div className="dash-grid">
+        {/* panel-body 把内容在拉伸出来的面板里垂直居中：
+            数据少时面板变高，内容贴顶下方悬空比露画布更难看 */}
         <section className="panel">
           <h3 className="panel-title">解析结果分布</h3>
-          <Donut
-            segments={[
-              { label: "成功", value: view.ok, color: OK },
-              { label: "警告", value: view.warn, color: WARN },
-              { label: "失败", value: view.fail, color: ERR },
-            ]}
-            centerValue={successRate !== null ? fmtPct(successRate) : "—"}
-            centerLabel="成功率"
-          />
+          <div className="panel-body">
+            <Donut
+              segments={[
+                { label: "成功", value: view.ok, color: OK },
+                { label: "警告", value: view.warn, color: WARN },
+                { label: "失败", value: view.fail, color: ERR },
+              ]}
+              centerValue={successRate !== null ? fmtPct(successRate) : "—"}
+              centerLabel="成功率"
+            />
+          </div>
         </section>
 
         <section className="panel">
           <h3 className="panel-title">解析分级占比</h3>
-          <StackedBar
-            items={[
-              { label: "L0 深度解析", value: pick(view.levelPairs, "L0"), color: BRAND },
-              { label: "L1 基础解析", value: pick(view.levelPairs, "L1"), color: WARN },
-              { label: "L2 兜底提取", value: pick(view.levelPairs, "L2"), color: ERR },
-            ]}
-          />
-          <p className="panel-note">L0 越多说明版面还原越完整；L2 只保底提取文字。</p>
+          <div className="panel-body">
+            <StackedBar
+              items={[
+                { label: "L0 深度解析", value: pick(view.levelPairs, "L0"), color: BRAND },
+                { label: "L1 基础解析", value: pick(view.levelPairs, "L1"), color: WARN },
+                { label: "L2 兜底提取", value: pick(view.levelPairs, "L2"), color: ERR },
+              ]}
+            />
+            <p className="panel-note">L0 越多说明版面还原越完整；L2 只保底提取文字。</p>
+          </div>
         </section>
 
         <section className="panel">
           <h3 className="panel-title">文件类型分布</h3>
-          <Pie items={view.fmtPairs} />
+          <div className="panel-body">
+            <Pie items={view.fmtPairs} />
+          </div>
         </section>
 
         <section className="panel">
           <h3 className="panel-title">切片长度分布</h3>
-          <Histogram items={view.histPairs} />
-          <p className="panel-note">横轴为切片长度区间（约合字符数），纵轴为切片数量。</p>
+          <div className="panel-body">
+            <Histogram items={view.histPairs} />
+            <p className="panel-note">横轴为切片长度区间（约合字符数），纵轴为切片数量。</p>
+          </div>
         </section>
 
         <section className="panel panel-wide">
           <h3 className="panel-title">近期趋势</h3>
-          <TrendLine
-            series={[
-              { name: "导入", color: BRAND, points: view.imported },
-              { name: "解析成功", color: OK, points: view.parsedOk },
-            ]}
-            labels={view.days}
-          />
-          {view.coverage.length > 1 && (
-            <>
-              <div className="panel-subtitle">平均文本覆盖率（%）</div>
-              <TrendLine series={[{ name: "覆盖率", color: WARN, points: view.coverage }]} labels={view.days} />
-            </>
-          )}
+          <div className="panel-body">
+            <TrendLine
+              series={[
+                { name: "导入", color: BRAND, points: view.imported },
+                { name: "解析成功", color: OK, points: view.parsedOk },
+              ]}
+              labels={view.days}
+            />
+            {view.coverage.length > 1 && (
+              <>
+                <div className="panel-subtitle">平均文本覆盖率（%）</div>
+                <TrendLine series={[{ name: "覆盖率", color: WARN, points: view.coverage }]} labels={view.days} />
+              </>
+            )}
+          </div>
         </section>
 
         <section className="panel">
           <h3 className="panel-title">失败原因 TOP5</h3>
-          <BarList items={view.failPairs} onPick={(code) => navigate("logs", { code, level: "error" })} />
-          <p className="panel-note">点击任意一项可在日志中查看相关记录。</p>
+          <div className="panel-body">
+            <BarList items={view.failPairs} onPick={(code) => navigate("logs", { code, level: "error" })} />
+            <p className="panel-note">点击任意一项可在日志中查看相关记录。</p>
+          </div>
         </section>
 
         <section className="panel">
           <h3 className="panel-title">处理耗时</h3>
-          <BarList items={view.durPairs} valueFmt={(v) => fmtMs(v)} />
-          <p className="panel-note">按任务类型统计的平均耗时。</p>
+          <div className="panel-body">
+            <BarList items={view.durPairs} valueFmt={(v) => fmtMs(v)} />
+            <p className="panel-note">按任务类型统计的平均耗时。</p>
+          </div>
         </section>
       </div>
 
