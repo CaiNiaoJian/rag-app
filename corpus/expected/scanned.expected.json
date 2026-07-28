@@ -1,0 +1,6 @@
+{
+  "sample": "scanned.pdf",
+  "note": "无文本层的纯图片 PDF（模拟扫描件）。**当前必然走到 E05**：RapidOCR 尚未接入（03 章 §3 / D2，M2 交付），引擎明确告知「共 2 页全部是扫描图像，当前版本尚未内置 OCR」，而不是产出一份空文档假装成功——按 08 章口径，优雅报错也算通过。**M2 接入 OCR 后必须改这份标注**：must_not_fail 改 true、加 min_text_coverage 0.90，否则它就只是在证明引擎没炸，测不到 OCR 到底有没有生效。",
+  "must_not_fail": false,
+  "expect_error_code": "E05"
+}

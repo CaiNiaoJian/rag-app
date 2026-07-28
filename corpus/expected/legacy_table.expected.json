@@ -1,0 +1,24 @@
+{
+  "sample": "legacy_table.xls",
+  "note": "BIFF 旧格式：CI 无 LibreOffice 时走 xlrd 兜底转换，合并标题/加粗表头/日期列必须穿透保留",
+  "must_not_fail": true,
+  "max_seconds": 20,
+  "expect": {
+    "node_counts": {
+      "sheet": 2,
+      "sheet_region": 2
+    },
+    "text_contains": [
+      "部门预算表",
+      "研发",
+      "2026-02-11",
+      "以上金额均为含税价"
+    ],
+    "tables": [
+      {
+        "has_merged": true,
+        "cells_contain": ["科目", "2000000"]
+      }
+    ]
+  }
+}

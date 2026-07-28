@@ -55,8 +55,15 @@ export function Logs() {
     try {
       const params = new URLSearchParams({ page: String(pageNo) });
       if (level) params.set("level", level);
-      if (q.trim()) params.set("q", q.trim());
       if (taskFilter) params.set("task_id", taskFilter);
+      /* 错误码借道 q 下发：/logs 没有独立的 code 参数，但它的 q 落到 SQL 是
+       * `message LIKE %q% OR code LIKE %q%`（db.query_events），传 code 就能让筛选发生在库里。
+       * 这一步是必须的——只在前端 filter 的话，用户从仪表盘「失败原因 TOP」下钻进来，
+       * 看到的只是当前这 100 条里碰巧含该码的几条，往后翻页也永远补不齐。
+       * q 只有一个坑位：code 与用户关键词同时存在时优先下发 code（选择性高得多），
+       * 关键词退回本地收敛（见下方 visible），免得静默丢掉其中一个条件。*/
+      if (codeFilter) params.set("q", codeFilter);
+      else if (q.trim()) params.set("q", q.trim());
       const resp = await client.getJson<unknown>(`/logs?${params.toString()}`);
       const { items, total: n } = unwrapItems<LogRow>(resp);
       setRows(items);
@@ -65,7 +72,7 @@ export function Logs() {
       setRows([]);
       setTotal(0);
     }
-  }, [client, pageNo, level, q, taskFilter]);
+  }, [client, pageNo, level, q, taskFilter, codeFilter]);
 
   /* 与文档库一致：搜索词变化延后 200ms 合并请求 */
   useEffect(() => {
@@ -94,12 +101,18 @@ export function Logs() {
     if (kw !== undefined) setQ(kw);
   }, [nav]);
 
-  /* 错误码过滤在前端做：/logs 契约里没有 code 参数，
-   * 而日志分页数据量小（100/页），本地过滤足够且不动契约 */
-  const visible = useMemo(
-    () => (codeFilter ? rows.filter((r) => (r.code ?? "") === codeFilter) : rows),
-    [rows, codeFilter],
-  );
+  /* 服务端按 code 下发的是超集：q 也会 LIKE 到 message 里恰好提到该码的行，这里收敛成精确相等；
+   * 顺手补上被 code 挤掉坑位的关键词，让「下钻 + 再输关键词」两个条件都还在。
+   * 已知残留：Pagination 用的 total 是服务端超集计数，页数可能虚高（最多多出几行的量）。
+   * 要彻底对齐需引擎侧给 GET /logs 补精确的 code 参数（routes_logs.list_logs 加一个 Query，
+   * db.query_events 里加一条 `code=?`），那是引擎的活，本次不动。*/
+  const visible = useMemo(() => {
+    if (!codeFilter) return rows;
+    const kw = q.trim().toLowerCase();
+    return rows.filter(
+      (r) => (r.code ?? "") === codeFilter && (!kw || r.message.toLowerCase().includes(kw)),
+    );
+  }, [rows, codeFilter, q]);
 
   const openTask = async (taskId: string) => {
     try {

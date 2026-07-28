@@ -25,10 +25,16 @@ files:
 
 asar: true
 
-# ⚠️ M5 接入点（08 章里程碑）：这里指向 PyInstaller onedir 的产物目录。
-# 目前 engine/dist/engine 尚未生成，`npm run dist` 会在此处报「源目录不存在」；
-# M5 的出包脚本需先执行 PyInstaller（onedir，便于逐文件哈希校验），再跑本配置。
+# 引擎产物目录（PyInstaller onedir）。出包前必须先跑：
+#   cd engine && uv run pyinstaller docfactory.spec --noconfirm
+# 目录不存在时 electron-builder 会在此处报「源目录不存在」。CI 里由 package job
+# 从 engine job 的 artifact 取回到同一相对路径（见 .github/workflows/ci.yml）。
 # 安装后的最终位置：<安装目录>\resources\engine\engine.exe
+#
+# 第三方许可声明（署名义务，03 章 §6）随引擎目录一起进包：CI 的许可证扫描步骤
+# 把 THIRD-PARTY-NOTICES.txt 写进 engine/dist/engine/，本地出包想带上它则运行：
+#   cd engine && uv run python scripts/license_scan.py --notices dist/engine/THIRD-PARTY-NOTICES.txt
+# package job 的体积门禁会核验它存在于 resources\engine\ 下。
 extraResources:
   - from: ../engine/dist/engine
     to: engine

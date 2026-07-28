@@ -8,12 +8,14 @@
 - **错误收口**：DocFactoryError → 错误三级呈现结构（人话/建议/详情，FR-13）；
   未预期异常 → E06，且不把栈回给 UI（栈只进日志）。
 - 路由模块**按需挂载**：某个 routes_*.py 尚未落地时只记 warning，不阻断引擎启动，
-  避免并行开发期一个文件缺失导致整机起不来。
+  避免并行开发期一个文件缺失导致整机起不来。**打包产物例外**：那里缺路由只可能是打包
+  事故，静默降级会让用户看到「功能凭空消失」而不是明确报错，所以直接硬失败。
 """
 
 from __future__ import annotations
 
 import importlib
+import sys
 import threading
 from collections.abc import Callable
 from typing import Any
@@ -163,14 +165,19 @@ def create_app(
             status_code=500, content=error_payload("E06", type(exc).__name__)
         )
 
+    packaged = bool(getattr(sys, "frozen", False))
     for module_name, label in _ROUTE_MODULES:
         try:
             module = importlib.import_module(module_name)
         except ImportError as exc:
+            if packaged:
+                raise RuntimeError(f"路由模块缺失：{label}（{module_name}）—— {exc}") from exc
             logger.warning(f"路由模块未就绪，跳过挂载：{label}（{module_name}）—— {exc}")
             continue
         router = getattr(module, "router", None)
         if router is None:
+            if packaged:
+                raise RuntimeError(f"路由模块缺少 router：{label}（{module_name}）")
             logger.warning(f"路由模块缺少 router：{module_name}")
             continue
         app.include_router(router)

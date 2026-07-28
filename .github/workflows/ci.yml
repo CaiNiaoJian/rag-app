@@ -3,10 +3,16 @@
 # 跑在 windows-latest：本产品只发 Windows，路径分隔符、编码、进程树 kill 这些
 # 最容易出问题的地方必须在目标平台上验，Linux 上跑绿灯没有意义。
 #
-# 三道门禁，任一失败即阻断合入：
-#   ① 引擎：ruff → pytest → **许可证红线扫描**（GPL/AGPL 出现即失败，03 章 §6）
-#   ② 桌面端：tsc 类型检查 → electron-vite 构建
-#   ③ 产物体积与 NSIS 出包在 M5 接入（见下方 TODO），M1 先保证前两道
+# 三个 job，任一失败即阻断合入：
+#   ① engine   —— ruff → pytest → 源码冒烟 → **PyInstaller 出包 → 打包产物冒烟** →
+#                  corpus 回归 → 许可证红线扫描（GPL/AGPL 出现即失败，03 章 §6）
+#   ② desktop  —— tsc 类型检查 → electron-vite 构建（不依赖引擎，失败要快速反馈）
+#   ③ package  —— 取 ①② 的产物出 NSIS 安装包 → 体积门禁（08 章 §4 的 M1 首要交付物，
+#                  「打包链路最大集成风险前置」，所以在 M1 就必须常态化跑，不能留到 M5）
+#
+# 为什么打包产物要单独冒烟：源码模式下解释器能看见整个 src/ 树，打包产物只有 spec
+# 显式收进去的东西。两者的差异正是「本机全绿、装到用户机上起不来」的全部来源——
+# migrations/*.sql 漏出 spec 的 datas 就是实例：单测 162 个全绿，exe 启动即挂。
 name: CI
 
 on:
@@ -52,6 +58,28 @@ jobs:
         # 单测是进程内跑 runner，绕过了真实进程边界；这一步补上握手、Bearer、SSE 三样
         run: uv run python scripts/smoke_e2e.py
 
+      - name: PyInstaller 出包（onedir）
+        # onedir 而非 onefile：冷启动预算 5s，且 .kmod 逐文件哈希校验要求文件真实可寻址
+        run: uv run pyinstaller docfactory.spec --noconfirm
+
+      - name: 打包产物冒烟（同一套链路，改跑真 exe）
+        # 这道门禁专抓 spec 漏收：源码全绿而 exe 起不来的问题只有这里能拦住
+        run: uv run python scripts/smoke_e2e.py --exe dist/engine/engine.exe
+
+      - name: 许可证红线扫描（GPL/AGPL 即阻断）
+        # 第三方声明直接写进引擎产物目录：随 engine-onedir 一起进安装包的
+        # resources\engine\，闭源商用分发的署名义务（尤其 LibreOffice MPL-2.0）
+        # 从此有了载体——package job 的体积门禁会核验它真的在包里
+        run: uv run python scripts/license_scan.py --notices dist/engine/THIRD-PARTY-NOTICES.txt
+
+      - name: 上传引擎产物（供 package job 出安装包，内含第三方许可声明）
+        uses: actions/upload-artifact@v4
+        with:
+          name: engine-onedir
+          path: engine/dist/engine
+          # 几百 MB 的中间产物，留够排障即可，别长期占存储配额
+          retention-days: 3
+
       - name: golden corpus 回归（解析质量门禁）
         # --generate 造出程序化 fixtures：CI 不依赖任何入库的真实语料就能跑最小回归集
         run: uv run python ../corpus/run_corpus.py --generate --report ../corpus/report.md
@@ -63,14 +91,11 @@ jobs:
           name: corpus-report
           path: corpus/report.md
 
-      - name: 许可证红线扫描（GPL/AGPL 即阻断）
-        run: uv run python scripts/license_scan.py --notices THIRD-PARTY-NOTICES.txt
-
       - name: 上传第三方许可声明
         uses: actions/upload-artifact@v4
         with:
           name: third-party-notices
-          path: engine/THIRD-PARTY-NOTICES.txt
+          path: engine/dist/engine/THIRD-PARTY-NOTICES.txt
 
   desktop:
     name: 桌面端（Node 24 / Windows）
@@ -96,8 +121,58 @@ jobs:
       - name: 构建（main / preload / renderer 三段）
         run: npm run build
 
-      # TODO(M5)：接入 NSIS 出包与体积门禁 ——
-      #   1) 先跑 PyInstaller onedir 产出 engine.exe，放进 app/resources/engine/
-      #   2) npm run dist 出 NSIS 安装包
-      #   3) 校验安装包体积 ≤ 2GB（08 章 §2 体积清单）
-      #   4) 代码签名（证书走 GitHub Secrets，不入库）
+  package:
+    name: NSIS 安装包（08 章 §2）
+    needs: [engine, desktop]
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 取引擎产物
+        # electron-builder.yml 的 extraResources 指向 ../engine/dist/engine，
+        # 路径必须与 engine job 上传时的布局逐字对上，否则出包会静默少一个引擎
+        uses: actions/download-artifact@v4
+        with:
+          name: engine-onedir
+          path: engine/dist/engine
+
+      - name: 出 NSIS 安装包
+        run: npm run dist
+
+      - name: 体积门禁（≤ 2GB，08 章 §2 体积清单）
+        shell: pwsh
+        run: |
+          $setup = Get-ChildItem dist/*-setup.exe | Select-Object -First 1
+          if (-not $setup) { throw "未产出安装包" }
+          $mb = [math]::Round($setup.Length / 1MB, 1)
+          Write-Host "安装包：$($setup.Name) —— $mb MB"
+          # 引擎产物里必须真的有 engine.exe：extraResources 配错时 electron-builder
+          # 不一定报错，但装出来的应用会在启动时报 E06「未找到引擎可执行文件」
+          $engine = "dist/win-unpacked/resources/engine/engine.exe"
+          if (-not (Test-Path $engine)) { throw "安装包内缺少引擎：$engine" }
+          # 署名义务门禁（03 章 §6）：第三方许可声明必须随包分发，缺了就是合规事故
+          $notices = "dist/win-unpacked/resources/engine/THIRD-PARTY-NOTICES.txt"
+          if (-not (Test-Path $notices)) { throw "安装包内缺少第三方许可声明：$notices" }
+          if ($setup.Length -gt 2GB) { throw "安装包 $mb MB 超过 2GB 上限" }
+
+      - name: 上传安装包
+        uses: actions/upload-artifact@v4
+        with:
+          name: docfactory-setup
+          path: app/dist/*-setup.exe
+          retention-days: 7
+
+      # TODO(M5)：代码签名（证书走 GitHub Secrets，不入库）+ longPathAware 清单注入。
+      # 顺序不能反：清单注入必须在签名之前，否则改清单会让签名失效。

@@ -28,6 +28,10 @@ export interface NavRequest {
   params: Record<string, string>;
 }
 
+/* 界面外观（本地偏好，存 localStorage，与引擎设置无关） */
+export type ThemeChoice = "system" | "light" | "dark";
+export type DensityChoice = "compact" | "comfortable";
+
 export interface AppContextValue {
   client: EngineClient;
   engine: DfEngineInfo | null;
@@ -35,6 +39,10 @@ export interface AppContextValue {
   nav: NavRequest;
   navigate: (page: PageId, params?: Record<string, string>) => void;
   toast: (msg: string, kind?: "info" | "ok" | "err", action?: ToastAction) => void;
+  theme: ThemeChoice;
+  setTheme: (t: ThemeChoice) => void;
+  density: DensityChoice;
+  setDensity: (d: DensityChoice) => void;
 }
 
 export const AppContext = createContext<AppContextValue | null>(null);

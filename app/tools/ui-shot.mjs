@@ -8,8 +8,11 @@
  * 假数据刻意「有内容且不完美」：既有成功也有警告和失败、名字有长有短、中英混排、
  * 覆盖率有高有低。空页面看不出设计问题，全绿的页面同样看不出。
  *
- * 用法：
- *   npm run build && node tools/ui-shot.mjs [输出目录] [--page workbench]
+ * 用法（必须用 electron 跑，不能用 node）：
+ *   npm run build && npx electron tools/ui-shot.mjs [输出目录] [--page=workbench]
+ *   或一步到位：npm run ui:shot
+ * 下面 import 的是 Electron 内建的 CJS 模块，node 解析 ESM 具名导入时拿不到
+ * BrowserWindow，会直接报 SyntaxError: Named export 'BrowserWindow' not found。
  */
 
 import { app, BrowserWindow } from "electron";
@@ -24,6 +27,8 @@ const args = process.argv.slice(2).filter((a) => !a.startsWith("--"));
 const flags = process.argv.slice(2).filter((a) => a.startsWith("--"));
 const OUT_DIR = args[0] ? resolve(args[0]) : join(APP_DIR, ".ui-shots");
 const onlyPage = flags.find((f) => f.startsWith("--page="))?.split("=")[1] ?? null;
+/* --theme=dark：强制深色主题截图（深色回归也能一条命令跑完） */
+const themeFlag = flags.find((f) => f.startsWith("--theme="))?.split("=")[1] ?? null;
 
 /* 1440x900 是这类桌面工具最常见的窗口尺寸；deviceScaleFactor=2 出的图放大看得清抗锯齿 */
 const WIDTH = 1440;
@@ -203,6 +208,13 @@ async function shoot() {
   await win.webContents.session.setProxy({ mode: "direct" });
   await win.loadFile(join(APP_DIR, "out", "renderer", "index.html"));
 
+  if (themeFlag) {
+    /* 直接改 data-theme：App 的主题 effect 只在偏好变化时重跑，截图期间不会覆盖它 */
+    await win.webContents.executeJavaScript(
+      `document.documentElement.dataset.theme = ${JSON.stringify(themeFlag)}; 1`
+    ).catch(() => {});
+  }
+
   const written = [];
   for (const page of targets) {
     // 点左侧导航切页：走真实交互路径，顺带能发现导航本身的问题
@@ -233,6 +245,15 @@ async function shoot() {
     await win.webContents.executeJavaScript(
       "new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(1))))"
     ).catch(() => {});
+    // 光等两帧还不够：show:false 的窗口合成器可能根本不产新帧，
+    // capturePage 于是端出上一页的旧帧（批量截图从第 4 页起整体错位一页就是它）。
+    // invalidate 强制走一次完整重绘，之后必须再等两帧 + 一拍：截早了会拿到
+    // 「标题换了、内容还没画」的混合帧。
+    win.webContents.invalidate();
+    await win.webContents.executeJavaScript(
+      "new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(1))))"
+    ).catch(() => {});
+    await new Promise((r) => setTimeout(r, 350));
     const image = await win.webContents.capturePage();
     const file = join(OUT_DIR, `${page}.png`);
     await writeFile(file, image.toPNG());

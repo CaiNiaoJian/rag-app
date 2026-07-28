@@ -6,9 +6,9 @@
  * - **SSE 优先、轮询兜底**：running 任务逐个订阅 /tasks/{id}/events 拿页粒度进度；
  *   断流（引擎重启/网络层异常）时 api.ts 会静默结束，这里把节奏降级为 5s 轮询并明示，
  *   绝不因为进度流断了就弹错——任务本身还在引擎里跑。
- * - **队列暂停是「暂停派发」**：引擎侧没有全局暂停语义（队列即 SQLite 表），
- *   强行取消再重建会丢进度。这里只拦住「新导入的文件不立刻建解析任务」，
- *   已在引擎里的任务继续跑完，文案如实说明。
+ * - **队列暂停是引擎侧的持久开关**（POST /queue/pause，meta 表持久化）：排队任务
+ *   原地保留不取消不重建（task_id 稳定，追溯链不断），正在处理的任务跑完为止；
+ *   刷新页面、重开窗口、引擎重启都不会丢暂停态。此前「取消再重建」的模拟已废弃。
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
@@ -93,9 +93,9 @@ export function Workbench({ incoming }: { incoming: { seq: number; entries: DfPa
   const [importing, setImporting] = useState(false);
   const [importErr, setImportErr] = useState<{ code: string | null; detail: string } | null>(null);
 
+  /* 暂停态的唯一事实来源是引擎（GET /queue）；本地 state 只是它的镜像 */
   const [paused, setPaused] = useState(false);
-  /* 暂停期间被拦下的任务：存重建所需的全部信息，「继续」时原样再派一次 */
-  const [held, setHeld] = useState<{ name: string; type: string; payload: Record<string, unknown> }[]>([]);
+  const [queuedCnt, setQueuedCnt] = useState(0);
 
   const [detail, setDetail] = useState<TaskDetail | null>(null);
   const [detailLogs, setDetailLogs] = useState<LogRow[]>([]);
@@ -119,6 +119,10 @@ export function Workbench({ incoming }: { incoming: { seq: number; entries: DfPa
       const map: Record<string, DocumentRow> = {};
       for (const d of unwrapItems<DocumentRow>(docResp).items) map[d.id] = d;
       setDocs(map);
+      /* 暂停态跟着引擎走：别的窗口切过开关、或引擎重启恢复了暂停态，这里都会对齐 */
+      const queue = await client.getJson<{ paused?: boolean; queued?: number }>("/queue");
+      setPaused(queue.paused === true);
+      setQueuedCnt(typeof queue.queued === "number" ? queue.queued : 0);
     } catch {
       /* 引擎未就绪时静默重试（顶栏状态灯已经在提示），不打断用户 */
       setLoadFailed(true);
@@ -262,36 +266,20 @@ export function Workbench({ incoming }: { incoming: { seq: number; entries: DfPa
       const { items: results, skipped: engineSkipped } = await importPaths(usable.map((e) => e.path));
       let dup = 0;
       let queued = 0;
-      const pending: { name: string; type: string; payload: Record<string, unknown> }[] = [];
       for (const r of results) {
         if (r.duplicate_of) dup += 1;
         if (!r.doc_id) continue;
-        if (paused) {
-          /* 引擎在导入时就把解析任务建好了；队列处于暂停态时先取消、记下，
-           * 等用户点「继续派发」再原样重建 */
-          if (r.task_id) {
-            try {
-              await client.postJson(`/tasks/${encodeURIComponent(r.task_id)}/cancel`);
-            } catch {
-              /* 取消失败说明它已经跑起来了，让它跑完就好 */
-            }
-          }
-          pending.push({ name: r.name ?? r.doc_id, type: "parse", payload: { doc_id: r.doc_id } });
-          continue;
-        }
         if (r.task_id) {
-          queued += 1; // 引擎已自动建解析任务
+          queued += 1; // 引擎已自动建解析任务；队列暂停时它会原地等待，无需取消重建
           continue;
         }
         await client.postJson<{ task_id: string }>("/tasks", { type: "parse", payload: { doc_id: r.doc_id } });
         queued += 1;
       }
-      if (pending.length) setHeld((prev) => [...prev, ...pending]);
       setConfirmList(null);
       const skipped = list.length - usable.length + engineSkipped.length;
       const parts = [`已导入 ${results.length} 个文件`];
-      if (queued) parts.push(`${queued} 个解析任务已进队列`);
-      if (pending.length) parts.push(`${pending.length} 个因队列暂停等待派发`);
+      if (queued) parts.push(paused ? `${queued} 个解析任务已进队列（暂停中，等待恢复派发）` : `${queued} 个解析任务已进队列`);
       if (dup) parts.push(`${dup} 个与已有文档内容相同`);
       if (skipped) parts.push(`${skipped} 个已跳过`);
       toast(parts.join("，"), results.length ? "ok" : "err");
@@ -313,45 +301,23 @@ export function Workbench({ incoming }: { incoming: { seq: number; entries: DfPa
 
   // ---------------- 队列操作 ----------------
 
-  /* 暂停 = 取消所有「排队中」的任务并记下它们（引擎没有全局暂停语义，
-   * 队列就是 SQLite 表；正在处理的任务不打断，跑完为止） */
-  const pauseQueue = async () => {
-    setPaused(true);
-    const hold: { name: string; type: string; payload: Record<string, unknown> }[] = [];
-    for (const t of tasks) {
-      if (t.status !== "queued") continue;
-      try {
-        await client.postJson(`/tasks/${encodeURIComponent(t.id)}/cancel`);
-        hold.push({
-          name: (t.doc_id && docs[t.doc_id]?.name) || taskLabel(t),
-          type: t.type,
-          payload: parseJsonSafe<Record<string, unknown>>(t.payload_json, t.doc_id ? { doc_id: t.doc_id } : {}),
-        });
-      } catch {
-        /* 取消失败（多半已被领取）：留给它自己跑完 */
-      }
+  /* 暂停/恢复走引擎的持久开关（POST /queue/pause）：排队任务原地保留，
+   * 正在处理的任务不打断；刷新页面、重启引擎都不会丢这个状态 */
+  const setQueuePaused = async (next: boolean) => {
+    try {
+      const resp = await client.postJson<{ paused?: boolean }>("/queue/pause", { paused: next });
+      setPaused(resp.paused === true);
+      toast(
+        next
+          ? "已暂停派发：排队任务原地等待，正在处理的会跑完"
+          : queuedCnt
+            ? `已恢复派发，${queuedCnt} 个排队任务继续`
+            : "已恢复派发",
+        next ? "info" : "ok",
+      );
+    } catch {
+      toast(next ? "暂停失败，请稍后再试" : "恢复失败，请稍后再试", "err");
     }
-    if (hold.length) {
-      setHeld((prev) => [...prev, ...hold]);
-      toast(`已暂停，${hold.length} 个排队任务转入等待`, "info");
-    } else {
-      toast("已暂停：新导入的文件不会立即开始解析", "info");
-    }
-    void refresh();
-  };
-
-  const resumeQueue = async () => {
-    setPaused(false);
-    const list = held;
-    setHeld([]);
-    for (const h of list) {
-      try {
-        await client.postJson<{ task_id: string }>("/tasks", { type: h.type, payload: h.payload });
-      } catch {
-        toast(`「${h.name}」派发失败，可在文档库重试`, "err");
-      }
-    }
-    if (list.length) toast(`已派发 ${list.length} 个等待中的任务`, "ok");
     void refresh();
   };
 
@@ -432,18 +398,33 @@ export function Workbench({ incoming }: { incoming: { seq: number; entries: DfPa
         onDrop={(e) => void onDrop(e)}
         onClick={() => void pickFiles()}
         onKeyDown={(e) => {
+          /* 内部「选择文件」按钮的回车/空格留给按钮自己，否则会连开两次选择框 */
+          if (e.target !== e.currentTarget) return;
           if (e.key === "Enter" || e.key === " ") void pickFiles();
         }}
         role="button"
         tabIndex={0}
         aria-label="拖拽或点击选择文件导入"
       >
-        <svg viewBox="0 0 48 40" width="46" height="38" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
-          <path d="M24 27V8m0 0l-7 7m7-7l7 7" strokeLinecap="round" strokeLinejoin="round" />
-          <path d="M6 26v5a4 4 0 004 4h28a4 4 0 004-4v-5" strokeLinecap="round" />
-        </svg>
-        <div className="dropzone-title">把文件拖到这里，或点击选择</div>
+        <span className="dropzone-icon">
+          <svg viewBox="0 0 28 28" width="26" height="26" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">
+            <path d="M14 17.5V5.5m0 0l-4.5 4.5M14 5.5l4.5 4.5" strokeLinecap="round" strokeLinejoin="round" />
+            <path d="M4.5 17v3.2a2.3 2.3 0 002.3 2.3h14.4a2.3 2.3 0 002.3-2.3V17" strokeLinecap="round" />
+          </svg>
+        </span>
+        <div className="dropzone-title">把文件拖进来，导入即开始解析</div>
         <div className="dropzone-hint">支持 Word（doc/docx）、PDF、PPT（ppt/pptx）、Excel（xls/xlsx）；可整个文件夹拖入</div>
+        <div className="dropzone-actions">
+          <button
+            className="btn btn-primary"
+            onClick={(e) => {
+              e.stopPropagation();
+              void pickFiles();
+            }}
+          >
+            选择文件…
+          </button>
+        </div>
       </section>
 
       <section className="queue">
@@ -458,14 +439,14 @@ export function Workbench({ incoming }: { incoming: { seq: number; entries: DfPa
           <div className="queue-actions">
             {degraded && <span className="hint-dim" title="进度流已断开，改用 5 秒刷新">进度已降级为定时刷新</span>}
             {paused ? (
-              <button className="btn btn-sm btn-primary" onClick={() => void resumeQueue()}>
-                继续派发{held.length ? `（${held.length}）` : ""}
+              <button className="btn btn-sm btn-primary" onClick={() => void setQueuePaused(false)}>
+                继续派发{queuedCnt ? `（${queuedCnt}）` : ""}
               </button>
             ) : (
               <button
                 className="btn btn-sm"
-                onClick={() => void pauseQueue()}
-                title="排队中的任务转入等待，正在处理的会跑完；新导入的文件也不会立即开始解析"
+                onClick={() => void setQueuePaused(true)}
+                title="排队中的任务原地等待，正在处理的会跑完；重启应用暂停状态也会保留"
               >
                 暂停队列
               </button>
@@ -476,8 +457,8 @@ export function Workbench({ incoming }: { incoming: { seq: number; entries: DfPa
 
         {paused && (
           <div className="banner banner-warn">
-            队列已暂停：排队中的任务已转入等待（{held.length} 个），新导入的文件也会先等着；
-            正在处理的任务仍会跑完。点「继续派发」恢复。
+            队列已暂停：{queuedCnt ? `${queuedCnt} 个排队任务原地等待，` : ""}新导入的文件也会先排队等着；
+            正在处理的任务仍会跑完。暂停状态在重启后依然保留，点「继续派发」恢复。
           </div>
         )}
         {loadFailed && (
@@ -511,7 +492,24 @@ export function Workbench({ incoming }: { incoming: { seq: number; entries: DfPa
                   const stage = info?.stage ?? t.stage ?? undefined;
                   const running = t.status === "running";
                   return (
-                    <tr key={t.id} onClick={() => void openDetail(t)} className={t.status === "failed" ? "row-failed" : ""}>
+                    <tr
+                      key={t.id}
+                      onClick={() => void openDetail(t)}
+                      /* 整行点开详情的键盘等价物。行内还有「取消/重试/详情」按钮，它们的
+                       * 回车/空格必须留给按钮自己——所以只认焦点确实落在行本身上的按键，
+                       * 否则用键盘按「取消」会连带弹出详情抽屉。
+                       * 不给 role="button"：tr 的隐式 role="row" 是表格结构的一部分，
+                       * 改掉它整行就从表格的无障碍树里掉出去了，列头对应关系全丢。
+                       * 焦点环走 styles.css 里统一的 :focus-visible，不在这儿另写。 */
+                      onKeyDown={(e) => {
+                        if (e.target !== e.currentTarget) return;
+                        if (e.key !== "Enter" && e.key !== " ") return;
+                        e.preventDefault(); // 空格默认会滚动 table-wrap
+                        void openDetail(t);
+                      }}
+                      tabIndex={0}
+                      className={t.status === "failed" ? "row-failed" : ""}
+                    >
                       <td className="col-name">
                         <FmtIcon ext={doc?.fmt ?? extOf(name)} />
                         <span className="ellipsis" title={name}>{name}</span>

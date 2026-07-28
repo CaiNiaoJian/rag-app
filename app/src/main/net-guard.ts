@@ -1,17 +1,24 @@
 /* 网络封锁：离线与安全强制的 Electron 侧实现（02 章 §7）。
  *
- * 三道闸，缺一不可：
+ * 四道闸，缺一不可：
  *   ① webRequest.onBeforeRequest 白名单 —— 硬闸。CSP 只约束页面发起的请求，
  *      这里连 Chromium 内部组件发起的请求一起挡，非白名单一律 cancel 并记 warning。
  *   ② onHeadersReceived 注入 CSP —— 纵深防御。注意 file:// 文档走不到响应头，
  *      生产环境实际生效的是 index.html 里那份冻结的 CSP meta，本函数是给
  *      开发期 dev server（http 响应）与将来可能的自定义协议兜底。
+ *      两份必须逐条同步，同步规则与例外见 buildCsp 上方注释。
  *   ③ 导航闸 —— will-navigate / setWindowOpenHandler 一律 deny，
  *      避免任何一次误点把 renderer 导航到外部页面（那会绕过 ① 的白名单语义）。
+ *   ④ 主进程 socket 闸 —— ①②③ 全在 Chromium 网络栈里，而主进程自己用的是 Node 的
+ *      net/http 与 undici fetch，一道都不经过。引擎侧早有 offline_guard.py 在
+ *      socket 层强制，主进程这边缺了对等物就只剩「靠代码评审自觉」，
+ *      与 02 章 §7「代码层面强制」的定位对不上。见 installProcessSocketGuard。
  *
  * 白名单只认本机回环的两个端口：引擎端口（随启动变化，故用回调实时取）与
  * 开发期 vite dev server 端口。除此之外 http/ws 一律拒绝，https 一律拒绝。
  */
+
+import net from "node:net";
 
 import { app, type Session } from "electron";
 import log from "electron-log/main";
@@ -71,6 +78,27 @@ export function isAllowedUrl(rawUrl: string, opts: NetGuardOptions): boolean {
   return devPort > 0 && port === devPort;
 }
 
+/* 同一份 CSP 在仓库里有三处落点，改任何一条指令都必须三处一起过一遍：
+ *   1. 本函数 —— 经 onHeadersReceived 下发。生产走 file://，响应头这条路根本不存在，
+ *      所以它实际只在开发期（dev server 的 http 响应）生效。
+ *   2. src/renderer/index.html 的 CSP meta —— **生产环境真正生效的那一份**。
+ *   3. electron.vite.config.ts 的 devCspPlugin —— 仅 serve 时把 2 整个换成放宽 HMR 的版本。
+ *
+ * 审计已经抓到过一次漂移：本函数写满 13 条，meta 却停在 5 条，于是 base-uri、
+ * form-action、object-src、frame-src 在生产里全都没生效。前两条尤其致命 —— 它们
+ * **没有 default-src 回退**，缺了就等于允许 base 标签劫持全部相对路径加载、允许表单
+ * 提交到任意 URL，而读代码只看本函数会以为一切都拦住了。只改一处不会有任何编译或运行
+ * 期报错，唯一的防线就是这段注释与 index.html 里那段对应的注释。
+ *
+ * meta 与本函数生产分支逐条一致，仅一处有意差异：frame-ancestors。按 CSP 规范，
+ * meta 交付时 frame-ancestors / report-uri / sandbox 会被忽略并在控制台报错，所以
+ * meta 里不写它；顶层 file:// 文档本就无法被嵌套，webview 挂载与 window.open 又已被
+ * 导航闸 ③ 全拒，生产侧不存在实际缺口。
+ *
+ * 端口不写死：引擎端口每次启动随机（见 engine-supervisor），connect-src 只能用
+ * http://127.0.0.1:* 这种通配端口；渲染层的 baseURL 也固定拼 127.0.0.1（api.ts），
+ * 所以生产不必放行 localhost 这个别名。
+ */
 function buildCsp(opts: NetGuardOptions): string {
   const dev = opts.devServerUrl !== null;
   const connect = dev
@@ -89,6 +117,7 @@ function buildCsp(opts: NetGuardOptions): string {
     "worker-src 'self' blob:",
     "object-src 'none'",
     "frame-src 'none'",
+    // 唯一不出现在 index.html meta 里的一条（meta 交付时规范要求忽略它），理由见上
     "frame-ancestors 'none'",
     "base-uri 'none'",
     "form-action 'none'",
@@ -229,4 +258,43 @@ export function disableChromiumNetworkFeatures(): void {
     if (value === undefined) app.commandLine.appendSwitch(name);
     else app.commandLine.appendSwitch(name, value);
   }
+}
+
+/**
+ * 主进程 socket 级离线闸：非回环的 TCP 连接直接抛，与引擎侧 offline_guard.py 对称。
+ *
+ * 上面三道闸全部活在 Chromium 网络栈里。主进程自己却不走 Chromium ——
+ * `engine-supervisor` 用的是 `node:http`，Node 还内置了 undici 的全局 `fetch`，
+ * 这两条路径对 webRequest 白名单与 `host-resolver-rules` 完全免疫。
+ * 今天主进程只连 127.0.0.1，但那是「靠自觉」；FR-17 要的是「代码层面强制」，
+ * 两者的差别会在某次顺手加个 HTTP 调用时显现出来。
+ *
+ * 在 `net.Socket.prototype.connect` 这一层拦，是因为 Node 的 http/https/undici
+ * 最终都落到它上面 —— 补一处等于把主进程所有出网路径一起收口。
+ * DNS 不解析：离线环境里主机名一律视为非回环，不为了判定去发一次查询。
+ */
+export function installProcessSocketGuard(): void {
+  const realConnect = net.Socket.prototype.connect;
+
+  const hostAllowed = (host: unknown): boolean =>
+    typeof host !== "string" || host === "" || isLoopbackHost(host);
+
+  net.Socket.prototype.connect = function patchedConnect(
+    this: net.Socket,
+    ...args: Parameters<typeof net.Socket.prototype.connect>
+  ): net.Socket {
+    const [first] = args;
+    // connect(options) / connect(port, host) / connect(path)（IPC 管道，本机内通信）
+    if (typeof first === "object" && first !== null && "host" in first) {
+      if (!hostAllowed((first as net.TcpNetConnectOpts).host)) {
+        throw new Error(`offline guard: blocked -> ${(first as net.TcpNetConnectOpts).host}`);
+      }
+    } else if (typeof first === "number") {
+      const host = args.find((a) => typeof a === "string");
+      if (!hostAllowed(host)) throw new Error(`offline guard: blocked -> ${String(host)}`);
+    }
+    return realConnect.apply(this, args);
+  } as typeof net.Socket.prototype.connect;
+
+  log.info("主进程 socket 闸已安装：非回环 TCP 连接一律拒绝");
 }

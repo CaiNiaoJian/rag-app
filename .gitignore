@@ -28,3 +28,13 @@ engine/THIRD-PARTY-NOTICES.txt
 
 # UI 截图工具的产物（视觉回归用，本地生成不入库）
 app/.ui-shots/
+app/.ui-shots-dark/
+
+# agent-swarm 运行时状态（本地工具产物，不入库）
+.swarm/
+
+# KC-Chat 运行时产物（插件自动生成，请勿入库）
+.cursor/mcp.json
+.cursor/kc-mcp/
+.cursor/kc-mcp-messages/
+.cursor/kc-chat-exports/

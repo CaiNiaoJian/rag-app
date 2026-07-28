@@ -181,6 +181,21 @@ def test_cancel_unknown_task(client):
     assert res.status_code == 400 and res.json()["error_code"] == "E03"
 
 
+def test_queue_pause_roundtrip(client, db: Database):
+    """队列暂停开关：GET 读状态 + 计数，POST 切换并持久化（meta 表）。"""
+    db.create_task("t-q1", "parse", None, {})
+    state = client.get("/queue").json()
+    assert state["paused"] is False and state["queued"] == 1 and state["running"] == 0
+
+    assert client.post("/queue/pause", json={"paused": True}).json()["paused"] is True
+    assert client.get("/queue").json()["paused"] is True
+    assert db.get_meta("queue_paused") == "1"      # 持久化：重启后 Scheduler 从这里恢复
+    assert db.get_task("t-q1")["status"] == "queued"  # 暂停不取消排队任务
+
+    assert client.post("/queue/pause", json={"paused": False}).json()["paused"] is False
+    assert db.get_meta("queue_paused") == "0"
+
+
 def test_sse_stream_replays_terminal_state(client, db: Database):
     """引擎重启后订阅历史任务：总线是空的，端点应从库里补一条终态再收流。"""
     db.create_task("t-old", "parse", None, {})

@@ -2,10 +2,24 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <!-- 离线安全约束（02 章 §7）：仅允许自身资源与本机引擎回环地址 -->
+    <!-- 离线安全约束（02 章 §7）：仅允许自身资源与本机引擎回环地址。
+
+         生产环境真正生效的 CSP 就是下面这一份 —— 打包后页面走 file:// 加载，压根没有
+         HTTP 响应头，net-guard.ts 里 onHeadersReceived 注入的那份只在开发期（dev server
+         的 http 响应）起作用。所以这里必须与 net-guard.ts 的 buildCsp() 生产分支逐条一致：
+         两边不同步不会有任何报错，只会让「代码里看起来很严」的策略在生产里悄悄降级 ——
+         本文件此前就漏了 base-uri / form-action，而这两条没有 default-src 回退，
+         等于 base 标签可劫持全部相对路径加载、表单可提交到任意 URL。
+
+         唯一有意的差异：frame-ancestors 按 CSP 规范在 meta 交付时会被忽略（写了只是在
+         控制台刷一条错），故只保留在 buildCsp() 的响应头版本里；顶层 file:// 文档本就
+         无法被嵌套，webview 挂载与 window.open 也已被导航闸全拒，生产侧没有实际缺口。
+
+         第三处副本在 electron.vite.config.ts 的 devCspPlugin，仅 serve 时整体替换本标签
+         （HMR 与 React Refresh 需要内联脚本），改动本标签时一并核对那份是否还兜得住。 -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' file: data:; connect-src 'self' http://127.0.0.1:*"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' file: data: blob:; font-src 'self' file: data:; media-src 'self' file: data:; connect-src 'self' http://127.0.0.1:*; worker-src 'self' blob:; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'"
     />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>DocFactory</title>

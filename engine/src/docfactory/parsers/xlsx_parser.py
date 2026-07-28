@@ -32,7 +32,7 @@ from openpyxl.utils import get_column_letter
 
 from docfactory.errors import DocFactoryError
 from docfactory.ir import IRNode, NodeContent, Prov, TableCell, TableContent
-from docfactory.parsers import ParseEnv, assert_ooxml_readable
+from docfactory.parsers import ParseEnv, assert_ooxml_readable, visible_chars
 
 # 03 章 §7：单 sheet 超过 10 万行截断
 MAX_SHEET_ROWS = 100_000
@@ -97,16 +97,21 @@ class _Region:
         )
 
 
-def _scan_regions(ws: Any, max_row: int, max_col: int) -> list[_Region]:
+def _scan_regions(ws: Any, max_row: int, max_col: int) -> tuple[list[_Region], int]:
     """把 sheet 切成若干连续非空矩形区域（03 章 §7「数据区域」）。
 
     规则：整行为空 → 纵向断开；组内整列为空 → 横向断开。
     只记录行边界与列占用集合，不缓存单元格，10 万行也就几 MB。
+
+    第二个返回值是本 sheet 的**文本层字符数**（text_coverage 分母的一部分）：
+    扫描本来就要触每个单元格，顺路累计比事后重开一遍工作簿便宜得多。
+    截断范围之外的内容不计入——截断已通过 E05 warning 明示，覆盖率只衡量静默丢失。
     """
     regions: list[_Region] = []
     start: int | None = None
     end = 0
     used: set[int] = set()
+    raw_chars = 0
 
     def close() -> None:
         nonlocal start, used
@@ -116,7 +121,12 @@ def _scan_regions(ws: Any, max_row: int, max_col: int) -> list[_Region]:
         start, used = None, set()
 
     for row in ws.iter_rows(min_row=1, max_row=max_row, min_col=1, max_col=max_col):
-        row_cols = [cell.column for cell in row if not _is_blank(cell.value)]
+        row_cols: list[int] = []
+        for cell in row:
+            if _is_blank(cell.value):
+                continue
+            row_cols.append(cell.column)
+            raw_chars += visible_chars(_fmt(cell.value))
         if not row_cols:
             close()
             continue
@@ -125,7 +135,7 @@ def _scan_regions(ws: Any, max_row: int, max_col: int) -> list[_Region]:
         end = row[0].row
         used.update(row_cols)
     close()
-    return regions
+    return regions, raw_chars
 
 
 def _split_columns(used: set[int]) -> list[tuple[int, int]]:
@@ -382,6 +392,7 @@ def _parse_sheets(wb: Any, probe: _FormulaProbe, env: ParseEnv) -> None:
     titles = list(wb.sheetnames)
     total = max(1, len(titles))
     env.page_count = len(titles)
+    raw_total = 0
 
     for page, title in enumerate(titles, start=1):
         ws = wb[title]
@@ -404,7 +415,8 @@ def _parse_sheets(wb: Any, probe: _FormulaProbe, env: ParseEnv) -> None:
                 page=page,
             )
 
-        regions = _scan_regions(ws, max_row, max_col)
+        regions, raw_chars = _scan_regions(ws, max_row, max_col)
+        raw_total += raw_chars
         has_drawing = bool(getattr(ws, "_images", None)) or bool(getattr(ws, "_charts", None))
         if not regions and not has_drawing:
             env.progress(page, total)
@@ -423,6 +435,8 @@ def _parse_sheets(wb: Any, probe: _FormulaProbe, env: ParseEnv) -> None:
         env.progress(page, total)
         env.check_cancel()
 
+    env.raw_char_total = raw_total  # text_coverage 分母（扫描时顺路累计，见 _scan_regions）
+
 
 def parse_text_fallback(src: Path, env: ParseEnv) -> None:
     """L2 兜底：逐 sheet 把非空单元格按行拼成纯文本，放弃区域与合并信息。"""
@@ -436,6 +450,7 @@ def parse_text_fallback(src: Path, env: ParseEnv) -> None:
 
 def _fallback_sheets(wb: Any, env: ParseEnv) -> None:
     env.page_count = len(wb.sheetnames)
+    raw_total = 0
     for page, title in enumerate(wb.sheetnames, start=1):
         ws = wb[title]
         max_row = min(int(ws.max_row or 0), MAX_SHEET_ROWS)
@@ -448,6 +463,7 @@ def _fallback_sheets(wb: Any, env: ParseEnv) -> None:
                 line = "\t".join(_fmt(v) for v in row).strip()
                 if line:
                     lines.append(line)
+                    raw_total += visible_chars(line)
         if not lines:
             continue
         node = env.builder.add(
@@ -458,3 +474,5 @@ def _fallback_sheets(wb: Any, env: ParseEnv) -> None:
             content=NodeContent(text="\n".join(lines)), prov=[Prov(page=page)],
         )
         env.mark_level(page, "L2")
+
+    env.raw_char_total = raw_total

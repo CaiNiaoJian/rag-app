@@ -1,0 +1,13 @@
+{
+  "sample": "long_table.pdf",
+  "note": "120 行表格跨 4 页，每页重复表头。**当前解析成 4 张独立的表而非合并成 1 张**——FR-02 要求的「跨页表合并」尚未实现。这里的 table 下限写 1 而不是 4：写 4 会在 M2 实现合并后变成假失败，写 1 则无论合并与否都通过，真实状态记在这条 note 里。M2 合并落地后改为断言 table 恰为 1 且 rows ≥ 120。正文语言取决于系统中文字体，故不断言表内文本。",
+  "must_not_fail": true,
+  "min_text_coverage": 0.97,
+  "max_seconds": 30,
+  "expect": {
+    "node_counts": {
+      "section": 1,
+      "table": 1
+    }
+  }
+}

@@ -60,6 +60,18 @@ ALLOWLIST_OVERRIDES: dict[str, str] = {
     # 例：Python 标准发行版本身带 GPL-with-linking-exception 的组件在此登记
 }
 
+# 构建期依赖排除集：只在出包链路上运行、**自身不进任何发布产物**的工具。
+# 红线口径是「分发物中的第三方组件」（03 章 §6），构建工具不在口径内——
+# 前提是它确实不进包，登记时必须写清依据：
+# - PyInstaller 采用 GPL-2.0 **带官方打包例外**（Bootloader Exception：允许用它
+#   打包并分发任意许可的程序）；且进入发布包的 bootloader 部分是 Apache-2.0，
+#   PyInstaller 本体不随包分发。
+# 注意：BANNED_PACKAGES 优先于本清单——被点名禁用的组件不能借「构建期」豁免。
+BUILD_ONLY_PACKAGES: dict[str, str] = {
+    "pyinstaller": "GPL-2.0 带 Bootloader Exception；仅构建期使用，本体不进发布包",
+    "pyinstaller-hooks-contrib": "同 PyInstaller，hook 集合仅在打包时执行",
+}
+
 # 本产品自有包：Proprietary 是预期值，不参与第三方许可判定，也不进 NOTICES
 SELF_PACKAGES: frozenset[str] = frozenset({"docfactory-engine"})
 
@@ -104,11 +116,16 @@ def scan() -> tuple[list[dict[str, str]], list[str]]:
         if name in SELF_PACKAGES:
             continue
         lic = _license_text(dist)
-        rows.append({"name": raw_name, "version": dist.version or "", "license": lic})
 
         if name in BANNED_PACKAGES:
+            rows.append({"name": raw_name, "version": dist.version or "", "license": lic})
             violations.append(f"禁用组件 {raw_name}=={dist.version}：{BANNED_PACKAGES[name]}")
             continue
+        # 构建期工具不进发布包 → 不参与红线判定，也不进 NOTICES（NOTICES 只声明随包分发的组件）
+        if name in BUILD_ONLY_PACKAGES:
+            continue
+
+        rows.append({"name": raw_name, "version": dist.version or "", "license": lic})
         if name in ALLOWLIST_OVERRIDES:
             continue
 

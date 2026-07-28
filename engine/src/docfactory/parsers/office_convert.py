@@ -144,6 +144,9 @@ def convert_to_ooxml(
     src_ext = src.suffix.lower().lstrip(".")
     soffice = find_soffice()
     if soffice is None:
+        produced = _fallback_convert(src, out_dir, src_ext, target_ext)
+        if produced is not None:
+            return produced
         raise DocFactoryError(
             "E03",
             f"未内置 LibreOffice，无法转换 .{src_ext} 旧格式文件。"
@@ -191,11 +194,37 @@ def convert_to_ooxml(
         last_error = f"退出码 {code}；输出：{output[:300] or '(无)'}"
         logger.warning(f"LibreOffice 未产出目标文件，第 {attempt}/{_MAX_ATTEMPTS} 次：{last_error}")
 
+    # soffice 两次都没成：.xls 还有 xlrd 这条纯 Python 退路可试。
+    # 兜底自身的报错不能掩盖主路径的失败原因，所以这里只接「读得出来」的情况。
+    try:
+        produced = _fallback_convert(src, out_dir, src_ext, target_ext)
+    except DocFactoryError:
+        produced = None
+    if produced is not None:
+        logger.warning(f"LibreOffice 转换失败，已用 xlrd 兜底完成：{src.name}")
+        return produced
+
     raise DocFactoryError(
         "E03",
         f"旧格式转换失败：{src.name} → .{target_ext}（{last_error}）。"
         f"可在原程序中另存为 .{target_ext} 后重新导入",
     )
+
+
+def _fallback_convert(
+    src: Path, out_dir: Path, src_ext: str, target_ext: str
+) -> tuple[Path, str] | None:
+    """无 LibreOffice 时的纯 Python 备选路径；当前仅覆盖 .xls（xlrd，BSD-3）。
+
+    .doc/.ppt 没有等价的可商用纯 Python 方案，返回 None 走原 E03 报错。
+    convert_chain 的 ``(xlrd)`` 后缀是溯源标记：图片/图表不经此路保留（模块 docstring）。
+    """
+    if src_ext != "xls" or target_ext != "xlsx":
+        return None
+    from docfactory.parsers.xls_compat import convert_xls_to_xlsx
+
+    produced = convert_xls_to_xlsx(src, Path(out_dir))
+    return produced, f"{src_ext}->{target_ext}(xlrd)"
 
 
 def _find_output(out_dir: Path, stem: str, target_ext: str) -> Path | None:

@@ -10,13 +10,13 @@
  * 系统信息，缺 task_events），保证「引擎起不来」这种最需要诊断的场景反而能出包。
  *
  * 隐私：日志本身只记文件名与元数据、不含文档内容（08 章），因此这里不做二次脱敏；
- * 诊断包只落到用户自选的本地路径，不出机器。
+ * 诊断包只落到用户自选的本地路径，不出机器，且交付后原件就地清掉（见 purgeBundles）。
  */
 
 import { spawn } from "node:child_process";
 import { copyFile, mkdir, mkdtemp, readdir, rm, stat, statfs, writeFile } from "node:fs/promises";
 import { cpus, freemem, totalmem, release, arch, tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, join, resolve } from "node:path";
 
 import { app, dialog, type BrowserWindow } from "electron";
 import log from "electron-log/main";
@@ -216,11 +216,15 @@ function compressWithPowerShell(srcDir: string, zipPath: string): Promise<boolea
 }
 
 /**
- * 导出诊断包：生成 → 另存对话框 → 复制到用户选择的位置。
- * 返回最终落盘路径；用户取消返回 null。
+ * 导出诊断包：生成 → 另存对话框 → 复制到用户选择的位置 → 清掉原件。
+ * 返回最终落盘路径；用户取消返回 null（此时生成的包同样清掉，没人再要它）。
  */
 export async function exportDiagnosticsZip(opts: DiagnosticsOptions): Promise<string | null> {
   log.info("开始导出诊断包");
+  /* 先给数据根里已有的诊断包拍个快照，收尾时连同本次这份一起清掉。
+   * 快照必须在打包**之前**取：万一同时还有第二次导出在跑，它新写的包不在快照里，
+   * 就不会被这一次误删（反过来那次也删不掉我们的，两边各清各的）。 */
+  const stale = await listStaleBundles(opts.dataRoot);
   let source = await packViaEngine(opts.supervisor);
   let temporary = false;
   if (!source) {
@@ -228,6 +232,8 @@ export async function exportDiagnosticsZip(opts: DiagnosticsOptions): Promise<st
     temporary = true;
   }
   if (!source) throw new Error("诊断包生成失败，请查看 logs 目录下的 app 日志");
+  // 降级包整个在临时目录里，由 cleanupTemp 连目录一起删，不进这份清单
+  const disposable = temporary ? stale : [...stale, source];
 
   const defaultName = basename(source).toLowerCase().endsWith(".zip")
     ? basename(source)
@@ -253,12 +259,16 @@ export async function exportDiagnosticsZip(opts: DiagnosticsOptions): Promise<st
 
   if (result.canceled || !result.filePath) {
     if (temporary) await cleanupTemp(source);
+    await purgeBundles(disposable, null);
     log.info("用户取消了诊断包导出");
     return null;
   }
 
   await copyFile(source, result.filePath);
   if (temporary) await cleanupTemp(source);
+  /* 复制成功之后才轮到清理：copyFile 失败会先抛出去，走不到这里，
+   * 原件仍留在数据根里可以手动取走 —— 不存在「删早了把唯一一份弄丢」。 */
+  await purgeBundles(disposable, result.filePath);
   log.info(`诊断包已导出：${result.filePath}`);
   return result.filePath;
 }
@@ -270,4 +280,48 @@ async function cleanupTemp(zipPath: string): Promise<void> {
   } catch (err) {
     log.warn(`清理诊断包临时目录失败：${String(err)}`);
   }
+}
+
+/** 数据根里的引擎诊断包（routes_logs.py 落在 {root}\diagnostics-{时间戳}.zip） */
+async function listStaleBundles(dataRoot: string): Promise<string[]> {
+  try {
+    const names = await readdir(dataRoot);
+    return names.filter((n) => /^diagnostics-.*\.zip$/i.test(n)).map((n) => join(dataRoot, n));
+  } catch (err) {
+    // 数据根读不动不该连累导出本身，顶多这次少清一批遗留包
+    log.warn(`扫描历史诊断包失败：${String(err)}`);
+    return [];
+  }
+}
+
+/**
+ * 清掉诊断包原件（含数据根里更早的遗留包）。
+ *
+ * 引擎把包写在数据根下，而原来这里只删降级模式的临时包，引擎生成的那份**从不删**。
+ * 于是每导出一次就在 %LOCALAPPDATA%\DocFactory\ 留下一个含系统信息与最近 500 条事件
+ * 明细的 zip：既占空间，又是一份用户看不见、也想不起来清理的长期隐私面。
+ *
+ * 为什么选「交付后删原件」而不是「保留最近 N 个」：这个包是导出流程的中间产物，
+ * 唯一的消费者就是刚才那次另存，用户要的那份已经在他自选的位置了；保留 N 个等于
+ * 把上面那份隐私面按设计常驻下来，换不到任何用处。顺带把快照里的遗留包一起收掉，
+ * 否则从旧版本升级上来的机器会一直背着历史包袱。
+ *
+ * `keep` 是用户选定的目标文件：他完全可能把另存位置就选在数据根里（甚至同名覆盖原件），
+ * 那一份是交付物，绝不能删。
+ */
+async function purgeBundles(paths: string[], keep: string | null): Promise<void> {
+  for (const p of paths) {
+    if (keep && samePath(p, keep)) continue;
+    try {
+      await rm(p, { force: true });
+    } catch (err) {
+      // 删不掉（被杀软/资源管理器占着）只记一笔，导出本身已经成功了
+      log.warn(`清理诊断包失败 ${p}：${String(err)}`);
+    }
+  }
+}
+
+/** 仅 Windows：路径大小写不敏感，比较前统一规范化并小写 */
+function samePath(a: string, b: string): boolean {
+  return resolve(a).toLowerCase() === resolve(b).toLowerCase();
 }

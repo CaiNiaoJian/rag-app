@@ -21,6 +21,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import sys
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -28,6 +29,7 @@ from typing import Any
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+from loguru import logger
 
 from docfactory import API_VERSION, ENGINE_VERSION, KMOD_MANIFEST_VERSION
 from docfactory.errors import DocFactoryError
@@ -38,13 +40,24 @@ from docfactory.errors import DocFactoryError
 # 轮换规程：新版本应用同时带新旧双公钥过渡 → 下下版移除旧钥，因此这里是 list。
 # 注意：下面第一枚是【开发占位公钥】——对应私钥已销毁、无人能签；发布前必须替换为
 # 正式公钥（正式私钥离线保管，不入库、不上 CI）。
+_DEV_PLACEHOLDER_KEY = "2b7517039416bd8adaff0d28ef68749108d6bb3376c12d7b1896ad6a1c86e86e"
+
 PUBLIC_KEYS: list[str] = [
-    "2b7517039416bd8adaff0d28ef68749108d6bb3376c12d7b1896ad6a1c86e86e",
+    _DEV_PLACEHOLDER_KEY,
 ]
 
 # 测试/开发允许经环境变量追加一枚公钥（kmod_tool.py 自签自验即走此通道），
 # 每次验证时实时读取，便于测试用例按需设置。
+#
+# **仅开发态生效**：打包产物（PyInstaller frozen）里这条通道整体失效。否则它就是信任链上
+# 的一个后门——能设一个环境变量的人即可自签模组、绕过全部验签，而验签是离线分发下
+# 唯一能拦住篡改包的东西。开发态保留是因为 kmod_tool.py 要自签自验。
 ENV_EXTRA_PUBKEY = "DOCFACTORY_KMOD_PUBKEY_EXTRA"
+
+
+def _is_frozen() -> bool:
+    """是否为打包产物（与 routes_logs 的判定口径一致）。"""
+    return bool(getattr(sys, "frozen", False))
 
 # zip 内固定成员名
 MANIFEST_NAME = "manifest.json"
@@ -81,10 +94,15 @@ def canonical_manifest_bytes(obj: dict[str, Any]) -> bytes:
 
 
 def load_public_keys() -> list[Ed25519PublicKey]:
-    """内置公钥 + 环境变量追加的测试公钥；非法条目跳过而非崩溃（保证验证流程可诊断）。"""
+    """内置公钥（+ 开发态经环境变量追加的测试公钥）；非法条目跳过而非崩溃（保证验证流程可诊断）。"""
     hexes = list(PUBLIC_KEYS)
+    frozen = _is_frozen()
+    if frozen and _DEV_PLACEHOLDER_KEY in hexes:
+        # 发布检查清单漏项：占位私钥已销毁，因此不是可利用漏洞，但意味着正式公钥没换上，
+        # 所有正式签名的模组都会装不上。留一条明确日志，别让它只在用户报障时才浮出来。
+        logger.warning("打包产物仍内置【开发占位公钥】，正式签名的模组将无法通过验签，请替换 PUBLIC_KEYS")
     extra = os.environ.get(ENV_EXTRA_PUBKEY, "").strip()
-    if extra:
+    if extra and not frozen:
         hexes.append(extra)
     keys: list[Ed25519PublicKey] = []
     for h in hexes:

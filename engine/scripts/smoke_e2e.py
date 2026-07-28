@@ -7,10 +7,22 @@ READY 握手、Bearer 鉴权、SSE 流。这个脚本把它们补上 —— 真�
     cd engine && uv run python scripts/smoke_e2e.py
 
 退出码 0 表示 M1 主链路（导入 → 解析 → 切片 → 导出）在真实进程边界下走通。
+
+**打包产物模式**（``--exe``）跑的是同一套流程，但拉起的是 PyInstaller 出的 exe：
+
+    cd engine && uv run python scripts/smoke_e2e.py --exe dist/engine/engine.exe
+
+这一档不是锦上添花。源码模式下解释器能看见整个 src/ 树，打包产物只有 spec 显式
+收进去的东西——两者的差异（漏收的包内数据文件、静态扫描看不见的延迟 import）
+恰好是「本机全绿、装到用户机上起不来」那一类问题的全部来源。
+实例：``migrations/*.sql`` 曾漏出 spec 的 datas，源码模式与 162 个单测全绿，
+打包产物却在 ``_bootstrap`` 第一步 ``db.migrate()`` 就 FileNotFoundError 退 2。
+所以出包之后必须再跑一遍这个脚本，把 exe 当成待验收的东西。
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import secrets
@@ -42,6 +54,34 @@ def step(message: str) -> None:
 def fail(message: str) -> None:
     print(f"\n✗ 冒烟失败：{message}", file=sys.stderr, flush=True)
     raise SystemExit(1)
+
+
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog="smoke_e2e", description="DocFactory 进程级冒烟验收"
+    )
+    parser.add_argument(
+        "--exe",
+        default=None,
+        help="改测 PyInstaller 打包产物（如 dist/engine/engine.exe）；缺省跑源码",
+    )
+    return parser.parse_args(argv)
+
+
+def _engine_command(exe: str | None, token: str, data_dir: Path) -> tuple[list[str], str]:
+    """返回 (命令行, 工作目录)。
+
+    打包产物的 cwd 取 exe 所在目录：onedir 布局下 ``_internal`` 与 exe 同级，
+    而 ``office_convert._bundled_candidates`` 也按 ``sys.executable`` 上溯找
+    ``resources/libreoffice``——工作目录跟着 exe 走才与真实安装形态一致。
+    """
+    common = ["--port", "0", "--token", token, "--data-dir", str(data_dir)]
+    if exe:
+        path = Path(exe).resolve()
+        if not path.is_file():
+            fail(f"打包产物不存在：{path}（先跑 uv run pyinstaller docfactory.spec --noconfirm）")
+        return [str(path), *common], str(path.parent)
+    return [sys.executable, "-m", "docfactory.main", *common], str(ENGINE_DIR)
 
 
 def wait_ready(proc: subprocess.Popen[str]) -> int:
@@ -76,7 +116,8 @@ def poll_task(client: httpx.Client, task_id: str, label: str) -> dict[str, Any]:
     return {}
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    args = _parse_args(argv)
     if str(FIXTURES_DIR) not in sys.path:
         sys.path.insert(0, str(FIXTURES_DIR))
     from make_fixtures import generate
@@ -92,11 +133,12 @@ def main() -> int:
 
     token = secrets.token_hex(16)
     env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
-    step("拉起引擎子进程（--port 0 随机端口）")
+    cmd, cwd = _engine_command(args.exe, token, data_dir)
+    mode = f"打包产物 {args.exe}" if args.exe else "源码"
+    step(f"拉起引擎子进程（{mode}，--port 0 随机端口）")
     proc = subprocess.Popen(
-        [sys.executable, "-m", "docfactory.main", "--port", "0",
-         "--token", token, "--data-dir", str(data_dir)],
-        cwd=str(ENGINE_DIR), env=env, text=True, encoding="utf-8", errors="replace",
+        cmd,
+        cwd=cwd, env=env, text=True, encoding="utf-8", errors="replace",
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
     )
 
@@ -188,7 +230,8 @@ def main() -> int:
             proc.kill()
             proc.wait(timeout=10)
 
-    print("\n✓ M1 主链路冒烟通过：READY 握手 → 鉴权 → 导入 → 解析 → SSE → 切片 → 导出 → 优雅退出")
+    print(f"\n✓ M1 主链路冒烟通过（{mode}）："
+          "READY 握手 → 鉴权 → 导入 → 解析 → SSE → 切片 → 导出 → 优雅退出")
     print(f"  数据目录：{data_dir}")
     return 0
 

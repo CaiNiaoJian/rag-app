@@ -5,7 +5,9 @@
 实现：monkeypatch socket 连接类调用（connect / connect_ex / sendto），目标非回环
 直接抛 OSError（前缀固定 "offline guard: blocked"）——白名单机制，宁可误杀不可漏放。
 进程入口应在任何网络组件初始化之前调用 install()。
-环境变量 DOCFACTORY_DISABLE_OFFLINE_GUARD=1 时跳过安装（仅供测试）。
+
+环境变量 DOCFACTORY_DISABLE_OFFLINE_GUARD=1 可跳过安装，**但仅在开发态生效**：
+打包产物（PyInstaller frozen）里这条通道整体失效，见 install()。
 """
 
 from __future__ import annotations
@@ -13,12 +15,20 @@ from __future__ import annotations
 import ipaddress
 import os
 import socket
+import sys
 from typing import Any
 
 # 已登记的本地服务端口（allow_port 供未来本地模型运行时注册监听端口）。
 # 回环地址本就整体放行，此表当前仅作登记；为将来「回环也按端口收紧」预留扩展点。
 _allowed_ports: set[int] = set()
 _installed: bool = False
+
+ENV_DISABLE = "DOCFACTORY_DISABLE_OFFLINE_GUARD"
+
+
+def _is_frozen() -> bool:
+    """是否为打包产物（与 modules/kmod.py、routes_logs.py 的判定口径一致）。"""
+    return bool(getattr(sys, "frozen", False))
 
 
 def allow_port(port: int) -> None:
@@ -71,8 +81,13 @@ def install(allowed_ports: set[int] | None = None) -> None:
     global _installed
     if allowed_ports:
         _allowed_ports.update(int(p) for p in allowed_ports)
-    if os.environ.get("DOCFACTORY_DISABLE_OFFLINE_GUARD") == "1":
-        return  # 仅测试场景放行（生产构建不设置该变量）
+    # 逃生门**只在开发态存在**。原先仅靠「生产构建不设置该变量」这个约定，可它拦不住
+    # 任何人：环境变量是用户可写的，而主进程 spawn 引擎时把 {...process.env} 整个传下去
+    # （app/src/main/engine-supervisor.ts），于是在目标机器上设一个系统环境变量就能让
+    # FR-17「代码层面强制禁止外联」这条硬约束彻底失效——而这正是本产品面向涉密内网的立身之本。
+    # 打包产物里直接无视该变量：测试要关闸，跑的是源码，不受影响。
+    if not _is_frozen() and os.environ.get(ENV_DISABLE) == "1":
+        return
     if _installed:
         return
     _installed = True

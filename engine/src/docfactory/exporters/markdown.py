@@ -124,12 +124,33 @@ def copy_assets(refs: list[str], assets_dir: Path | None, out_dir: Path) -> int:
     return copied
 
 
+# ---------------------------------------------------------------- 正文文本转义
+
+# 长得像 HTML 标签开头的 `<`：`<p`、`</td`、`<!--`、`<?xml`
+_TAG_LIKE = re.compile(r"<(?=[A-Za-z/!?])")
+
+
+def escape_tag_like(text: str | None) -> str:
+    """把文档正文里长得像 HTML 标签的 `<` 转义成 `&lt;`。
+
+    正文是**数据**，不该被下游当标记读。本模块唯一有权产出 HTML 的地方是
+    ``render_table_html``；其余文本一旦能伪装成标签，一段以 ``<table>`` 开头的正文就会
+    被渲染层当成表格结构吃掉——内容不是显示错了，是直接消失了（Markdown 生态的其他
+    渲染器同样会把它当原始 HTML 吞掉）。
+
+    只转义标签形态的 `<`：``a < b``、``<未填写>`` 这类自然文本保持原样，
+    不会把正常正文改得面目全非。
+    """
+    return _TAG_LIKE.sub("&lt;", str(text or ""))
+
+
 # ---------------------------------------------------------------- 表格渲染
 
 
 def _md_cell(text: str) -> str:
     """MD 表单元格转义：竖线会截断列，换行会截断行。"""
-    return str(text or "").replace("|", r"\|").replace("\r\n", "\n").replace("\n", "<br>").strip()
+    escaped = escape_tag_like(text)
+    return escaped.replace("|", r"\|").replace("\r\n", "\n").replace("\n", "<br>").strip()
 
 
 def render_table_markdown(table: TableContent) -> str:
@@ -227,6 +248,15 @@ class _MarkdownRenderer:
     def _children(self, node: IRNode) -> list[IRNode]:
         return [self.nodes[cid] for cid in node.children if cid in self.nodes]
 
+    @staticmethod
+    def _text(value: str | None) -> str:
+        """节点文本的统一取法：先转义标签形态的 `<`，再去首尾空白。
+
+        所有自由文本都走这一道门，正文才不可能伪装成结构化标记（见 escape_tag_like）。
+        例外是 ``_on_formula``：公式是另一套子语言，转义会把 LaTeX 改坏。
+        """
+        return escape_tag_like(value).strip()
+
     # ---- 主流程 ----
 
     def render(self) -> str:
@@ -261,14 +291,13 @@ class _MarkdownRenderer:
     def _on_section(self, node: IRNode, *, depth: int) -> None:
         level = node.level or (depth + 1)
         level = max(1, min(6, level))
-        text = (node.content.text or "").strip()
+        text = self._text(node.content.text)
         if text:
             self._emit("#" * level + " " + text)
         self._descend(node, depth=depth + 1)
 
     def _on_paragraph(self, node: IRNode, *, depth: int) -> None:
-        text = (node.content.text or "").strip()
-        self._emit(text)
+        self._emit(self._text(node.content.text))
         self._descend(node, depth=depth)
 
     def _on_table(self, node: IRNode, *, depth: int) -> None:
@@ -278,7 +307,7 @@ class _MarkdownRenderer:
 
     def _on_figure(self, node: IRNode, *, depth: int) -> None:
         rel = normalize_image_ref(node.content.image_ref)
-        caption = (node.content.caption or "").strip()
+        caption = self._text(node.content.caption)
         if rel:
             alt = _md_cell(caption) or "图片"
             self._emit(f"![{alt}]({rel})")
@@ -286,7 +315,7 @@ class _MarkdownRenderer:
             self._emit(f"*{caption}*")
         elif not rel and node.content.ocr_text:
             # 图片文件缺失但有 OCR 文本时，至少把文字留下来
-            self._emit(node.content.ocr_text.strip())
+            self._emit(self._text(node.content.ocr_text))
         self._descend(node, depth=depth)
 
     def _on_formula(self, node: IRNode, *, depth: int) -> None:
@@ -296,21 +325,21 @@ class _MarkdownRenderer:
         self._descend(node, depth=depth)
 
     def _on_slide(self, node: IRNode, *, depth: int) -> None:
-        title = (node.content.title or node.content.text or "").strip()
+        title = self._text(node.content.title or node.content.text)
         self._emit(f"## {title or '（无标题幻灯片）'}")
         self._descend(node, depth=depth + 1)
-        notes = (node.content.notes or "").strip()
+        notes = self._text(node.content.notes)
         if notes:
             quoted = "\n".join(f"> {line}" for line in notes.splitlines())
             self._emit(f"> **备注**\n>\n{quoted}")
 
     def _on_sheet(self, node: IRNode, *, depth: int) -> None:
-        name = (node.content.name or node.content.text or "").strip()
+        name = self._text(node.content.name or node.content.text)
         self._emit(f"## 工作表：{name or '（未命名）'}")
         self._descend(node, depth=depth + 1)
 
     def _on_sheet_region(self, node: IRNode, *, depth: int) -> None:
-        rng = (node.content.range or "").strip()
+        rng = self._text(node.content.range)
         if rng:
             self._emit(f"**区域 {rng}**")
         if node.content.table is not None:
@@ -327,13 +356,13 @@ class _MarkdownRenderer:
         if self.cs.drop_header_footer:
             self.visited.update(self._collect_subtree(node))
             return
-        text = (node.content.text or "").strip()
+        text = self._text(node.content.text)
         if text:
             self._emit(f"*{text}*")
         self._descend(node, depth=depth)
 
     def _on_footnote(self, node: IRNode, *, depth: int) -> None:
-        text = (node.content.text or "").strip()
+        text = self._text(node.content.text)
         if not text:
             return
         if self.cs.footnote_to_end:
@@ -357,7 +386,8 @@ class _MarkdownRenderer:
             if child.type == "list":
                 lines.extend(self._list_lines(child, indent=indent + 1))
                 continue
-            text = (child.content.text or "").strip()
+            text = self._text(child.content.text)
+            # 表格是本模块唯一有权产出 HTML 的地方，所以放在转义之后覆盖
             if child.type == "table" and child.content.table is not None:
                 text = render_table(child.content.table)
             if not text:

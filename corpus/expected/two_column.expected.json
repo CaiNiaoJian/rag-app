@@ -1,0 +1,13 @@
+{
+  "sample": "two_column.pdf",
+  "note": "双栏排版：08 章 §3.2「多栏阅读顺序正确率 ≥ 90%」的载体。当前 L1(pdfplumber) 没有版面分析，每页正文被聚合成整块（paragraph=4，而源文是 12 段），左右栏是否串序在这一级根本无从断言。**M2 接入 L0 版面分析后必须回来收紧**：paragraph 下限提到 12，并补「左栏四句连续出现、不与右栏交替」的顺序断言——否则这份样本只是在证明文本没丢，测不到多栏这个卖点。正文语言取决于系统中文字体是否可用，故不断言具体文本。",
+  "must_not_fail": true,
+  "min_text_coverage": 0.97,
+  "max_seconds": 30,
+  "expect": {
+    "node_counts": {
+      "section": 4,
+      "paragraph": 4
+    }
+  }
+}

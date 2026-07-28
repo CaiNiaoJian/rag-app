@@ -70,9 +70,35 @@ uv run python ../corpus/run_corpus.py --only 表格     # 只跑名字含「表�
    标注过细会让每次解析器改进都要改标注，标注就没人维护了。
 4. 提交时在 PR 里说明这份样本覆盖了哪个失败模式。
 
-## M1 的 20 份覆盖面（v0 清单）
+## M1 的 20 份覆盖面（v0 清单，已全部程序化）
 
-程序化 fixtures 覆盖：多级标题 docx、合并单元格表 docx、列表 docx、图文混排 pptx、
-多 sheet + 公式 + 合并单元格 xlsx、超大表 xlsx（截断路径）、多段文本 PDF、空文档、
-损坏文件、非支持格式。真实语料需人工补：多栏学术 PDF、扫描 PDF（倾斜/低分辨率）、
-跨页表 PDF、200+ 页大 PPT、旧版 doc/ppt、密码文件、500MB 超大 PDF、中英混排。
+| 分组 | 样本 | 覆盖的失败模式 |
+|---|---|---|
+| 结构还原 | `headings.docx` | 多级标题层级 |
+| | `merged_table.docx` | 合并单元格，取值归左上格 |
+| | `nested_list.docx` | 三级嵌套列表压平后语义错位 |
+| | `header_footer.docx` | 页眉页脚重复进切片（FR-16 剔除开关的载体） |
+| | `with_image.docx` | 图片抽取落 assets 与 MD 相对路径 |
+| | `bilingual.docx` | 中英日混排、全角标点、℃/②/m² 等非 ASCII |
+| | `slides.pptx` | 图文混排 + 演讲者备注 |
+| | `multisheet.xlsx` | 多 sheet、公式缓存值、空 sheet |
+| | `sparse_regions.xlsx` | 单 sheet 内多块不连续数据区域串列 |
+| | `two_column.pdf` | 双栏阅读顺序（08 §3.2 指标载体） |
+| | `long_table.pdf` | 120 行表跨 4 页 + 表头重复 |
+| | `text_document.pdf` | 数字 PDF 文本覆盖率与标题启发式 |
+| 规模与退化 | `wide_table.xlsx` | 600 行长表切行组、表头复制 |
+| | `large_deck.pptx` | 210 页 PPT 的线性度与静默截断 |
+| | `scanned.pdf` | 无文本层扫描件（当前走 E05，M2 接 OCR 后改标注） |
+| 优雅报错 | `empty.docx` | E05 无有效内容 |
+| | `corrupt.docx` | E01 zip 结构合法但非 OOXML |
+| | `truncated.pdf` | E01 只有文件头 |
+| | `encrypted.pdf` | E02 口令保护（不做破解，见 01 章 §2.3） |
+| | `unsupported.txt` | E03 导入阶段拦下 |
+
+**仍需真实语料补足**（无法程序化，放 `samples/` 本地跑）：旧版 doc/ppt/xls 二进制格式、
+倾斜与低分辨率的真实扫描件、500MB 级超大 PDF、真实排版的多栏学术论文。
+这几类在 M2 随 LibreOffice 与 OCR 接入时一并补，届时 corpus 扩至 50+。
+
+**两处标注刻意记录了「当前做不到」而非假装通过**，M2 必须回来收紧：
+`scanned.pdf` 现在断言 E05（OCR 未接入），`long_table.pdf` 现在只断言 table ≥ 1
+（跨页表尚未合并，实际解析成 4 张独立表）。详见各自的 `note` 字段。

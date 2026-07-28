@@ -116,6 +116,31 @@ def test_import_missing_file_raises(db: Database, paths: Paths, tmp_path: Path):
     assert exc.value.code in ("E01", "E03")
 
 
+def test_import_oversized_file_rejected(
+    db: Database, paths: Paths, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """单文件体积上限（ingest.MAX_FILE_BYTES = 500MB）此前零执行覆盖。
+
+    造一个真 500MB 文件既慢又费盘：把上限压小走**同一条分支**，断言语义不变——
+    超限报 E05 且不留半成品目录；恰好等于上限（<=）放行。
+    """
+    from docfactory import ingest
+    from docfactory.errors import DocFactoryError
+
+    big = tmp_path / "big.docx"
+    big.write_bytes(b"P" * 1024)
+
+    monkeypatch.setattr(ingest, "MAX_FILE_BYTES", 512)
+    with pytest.raises(DocFactoryError) as exc:
+        ingest.import_file(db, paths, big)
+    assert exc.value.code == "E05"
+    assert "上限" in exc.value.detail and "拆分" in exc.value.detail
+    assert not list(paths.workspace.glob("*")), "被拒的导入不得留下半成品目录"
+
+    monkeypatch.setattr(ingest, "MAX_FILE_BYTES", 1024)  # 边界：恰好等于上限应放行
+    assert ingest.import_file(db, paths, big)["doc_id"]
+
+
 # ---------------------------------------------------------------- 解析流水线
 
 

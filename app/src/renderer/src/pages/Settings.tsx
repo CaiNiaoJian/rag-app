@@ -80,7 +80,7 @@ function SettingsPlaceholder({ error, onRetry }: { error: string | null; onRetry
 }
 
 export function Settings() {
-  const { client, nav, toast } = useApp();
+  const { client, nav, toast, theme, setTheme, density, setDensity } = useApp();
 
   const [tab, setTab] = useState<TabId>("general");
   const [draft, setDraft] = useState<EngineSettings | null>(null);
@@ -187,19 +187,23 @@ export function Settings() {
 
   return (
     <div className="page page-settings">
-      <div className="tabs" role="tablist">
+      {/* 左侧竖排分区导航（VS Code / Windows 设置的标准形态）：
+          纵向空间由导航骨架占住，右侧内容短也不会显得「页面没铺完」 */}
+      <div className="settings-layout">
+      <nav className="settings-nav" role="tablist" aria-label="设置分区">
         {TABS.map((t) => (
           <button
             key={t.id}
             role="tab"
             aria-selected={tab === t.id}
-            className={`tab ${tab === t.id ? "tab-active" : ""}`}
+            className={`settings-nav-item ${tab === t.id ? "settings-nav-item-active" : ""}`}
             onClick={() => setTab(t.id)}
           >
             {t.label}
           </button>
         ))}
-      </div>
+        <div className="settings-nav-foot">DocFactory {versions?.app ?? ""}</div>
+      </nav>
 
       <div className="settings-body">
         {tab === "general" && (
@@ -208,6 +212,8 @@ export function Settings() {
               <SettingsPlaceholder error={settingsErr} onRetry={() => void loadSettings()} />
             ) : (
               <>
+                <div className="settings-card">
+                <div className="settings-card-title">常规</div>
                 <div className="field-row">
                   <div className="field-main">
                     <div className="field-title">默认输出目录</div>
@@ -263,6 +269,44 @@ export function Settings() {
                     <option value="high">高精度（需安装高精度 OCR 模组）</option>
                   </select>
                 </div>
+                </div>
+
+                {/* 外观是本机偏好：改动即时生效、存在本地，不随「保存」提交给引擎 */}
+                <div className="settings-card">
+                <div className="settings-card-title">外观</div>
+                <div className="settings-card-desc">本机偏好，改动即时生效，不需要点「保存」。</div>
+
+                <div className="field-row">
+                  <div className="field-main">
+                    <div className="field-title">主题</div>
+                    <div className="field-desc">跟随系统会随 Windows 的深浅色设置自动切换。</div>
+                  </div>
+                  <select
+                    className="select"
+                    value={theme}
+                    onChange={(e) => setTheme(e.target.value as typeof theme)}
+                  >
+                    <option value="system">跟随系统</option>
+                    <option value="light">浅色</option>
+                    <option value="dark">深色</option>
+                  </select>
+                </div>
+
+                <div className="field-row">
+                  <div className="field-main">
+                    <div className="field-title">列表密度</div>
+                    <div className="field-desc">紧凑适合一屏盯一批任务；舒适的行距更松，长时间浏览不累。</div>
+                  </div>
+                  <select
+                    className="select"
+                    value={density}
+                    onChange={(e) => setDensity(e.target.value as typeof density)}
+                  >
+                    <option value="compact">紧凑（默认）</option>
+                    <option value="comfortable">舒适</option>
+                  </select>
+                </div>
+                </div>
 
                 <SaveBar dirty={dirty} saving={saving} onSave={() => void save()} onReset={() => void loadSettings()} />
               </>
@@ -276,6 +320,8 @@ export function Settings() {
               <SettingsPlaceholder error={settingsErr} onRetry={() => void loadSettings()} />
             ) : (
               <>
+                <div className="settings-card">
+                <div className="settings-card-title">解析</div>
                 <div className="field-row">
                   <div className="field-main">
                     <div className="field-title">解析降级策略</div>
@@ -311,8 +357,11 @@ export function Settings() {
                     <span className="field-unit">秒</span>
                   </div>
                 </div>
+                </div>
 
-                <div className="field-group-title">切片默认值（导出中心可临时覆盖）</div>
+                <div className="settings-card">
+                <div className="settings-card-title">切片默认值</div>
+                <div className="settings-card-desc">导出中心可对单次导出临时覆盖这些值。</div>
 
                 <div className="field-row">
                   <div className="field-main">
@@ -384,6 +433,7 @@ export function Settings() {
                   </dl>
                   <p className="panel-note">引擎内部按 token 计数（04 章 §3.2），界面上的字符数为等价换算，仅用于直观理解。</p>
                 </details>
+                </div>
 
                 <SaveBar dirty={dirty} saving={saving} onSave={() => void save()} onReset={() => void loadSettings()} />
               </>
@@ -456,6 +506,8 @@ export function Settings() {
 
         {tab === "models" && (
           <section className="settings-pane">
+            <div className="settings-card">
+            <div className="settings-card-title">模型接口</div>
             <div className="pane-lead">
               本地模型接口用于「由模型自动生成问答数据集」等能力。当前版本只提供接口占位，
               不包含任何模型，也不会联网下载——这是刻意的：离线可控优先。
@@ -477,11 +529,13 @@ export function Settings() {
             <div className="pane-note">
               接口形态兼容 OpenAI 规范（/v1/models、/v1/chat/completions），仅监听本机回环地址。
             </div>
+            </div>
           </section>
         )}
 
         {tab === "about" && (
           <section className="settings-pane">
+            <div className="settings-card">
             <div className="about-title">DocFactory</div>
             <div className="about-sub">Windows 完全离线的 RAG 文档数据工厂</div>
             <dl className="kv kv-wide">
@@ -523,8 +577,10 @@ export function Settings() {
                 完整许可证文本随安装包一同分发。
               </p>
             </div>
+            </div>
           </section>
         )}
+      </div>
       </div>
 
       <ConfirmModal

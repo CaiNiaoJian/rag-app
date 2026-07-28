@@ -1,0 +1,22 @@
+{
+  "sample": "header_footer.docx",
+  "note": "页眉页脚各自成独立节点：FR-16 的 drop_header_footer 处理选项要有东西可剔。不剔除时每页重复的「内部资料」会反复进切片，既污染 RAG 语料又白烧 token。",
+  "must_not_fail": true,
+  "max_seconds": 10,
+  "expect": {
+    "node_counts": {
+      "section": 2,
+      "header": 1,
+      "footer": 1
+    },
+    "headings": [
+      "系统概述",
+      "部署要求"
+    ],
+    "text_contains": [
+      "内部资料 · 请勿外传",
+      "DocFactory 技术文档",
+      "Windows 10 1809 及以上版本"
+    ]
+  }
+}

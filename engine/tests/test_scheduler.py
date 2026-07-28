@@ -207,6 +207,86 @@ def test_cancel_running_task_at_checkpoint(db: Database, scheduler: Scheduler, u
     assert _wait_status(db, "t-run", {"canceled"}) == "canceled"
 
 
+def test_cancel_unresponsive_runner_forced_after_grace(
+    db: Database, scheduler: Scheduler, use_runner, monkeypatch: pytest.MonkeyPatch
+):
+    """取消宽限强制兜底（02 章 §2.1）：runner 卡在无检查点的第三方调用里时，
+    宽限超时必须 ① 强标 canceled ② 记 warning ③ 补位 worker（并发槽不泄漏）
+    ④ 弃用线程迟到返回后结果被丢弃。压缩宽限到 0.2s 走同一条代码路径。"""
+    monkeypatch.setattr(sched_mod, "_CANCEL_GRACE_S", 0.2)
+    started = threading.Event()
+    release = threading.Event()
+    late_done = threading.Event()
+
+    def runner(ctx: TaskContext) -> TaskOutcome:
+        if ctx.task_id != "t-stuck":
+            return TaskOutcome(status="done")
+        started.set()
+        release.wait(30)          # 模拟卡死：没有任何 ctx.cancelled() 检查点
+        late_done.set()
+        return TaskOutcome(status="done", message="迟到的成功")
+
+    use_runner(runner)
+    db.create_task("t-stuck", "parse", None, {})
+    scheduler.start()             # conftest 并发度=1：t-stuck 占住唯一的 worker
+    assert started.wait(10), "runner 未启动"
+
+    assert scheduler.cancel("t-stuck")["canceled"] is True
+    # ①② 宽限超时后强制终态 + warning 事件（含 E06 码）。
+    # 写入顺序契约：warning 先于终态可见，所以观察到 canceled 后事件必然已在库里
+    assert _wait_status(db, "t-stuck", {"canceled"}, timeout=5.0) == "canceled"
+    rows, total = db.query_events(level="warning", task_id="t-stuck")
+    assert total >= 1 and any(r["code"] == "E06" for r in rows)
+    # SSE 终态事件在库终态之后一拍才广播：这里对总线做短轮询而不是立即断言
+    deadline = time.monotonic() + 3.0
+    events: list[dict[str, Any]] = []
+    closed = False
+    while time.monotonic() < deadline and not closed:
+        events, _, closed = scheduler.bus.read("t-stuck", -1)
+        if not closed:
+            time.sleep(0.02)
+    assert closed and events[-1]["event"] == EVENT_DONE
+    assert events[-1]["data"]["status"] == "canceled"
+
+    # ③ 唯一的原 worker 还卡着，但补位的新 worker 必须能跑后续任务
+    db.create_task("t-after", "parse", None, {})
+    scheduler.notify()
+    assert _wait_status(db, "t-after", {"done"}, timeout=5.0) == "done"
+
+    # ④ 放开卡死调用：迟到结果被丢弃，终态不被改写
+    release.set()
+    assert late_done.wait(10)
+    time.sleep(0.3)  # 给弃用线程走完 finally 的时间
+    assert db.get_task("t-stuck")["status"] == "canceled", "迟到的 done 不得改写强制终态"
+
+
+def test_cancel_responsive_runner_does_not_trigger_force_path(
+    db: Database, scheduler: Scheduler, use_runner, monkeypatch: pytest.MonkeyPatch
+):
+    """宽限期内在检查点自行停下：不得出现强制路径的 warning（计时器被撤掉）。"""
+    monkeypatch.setattr(sched_mod, "_CANCEL_GRACE_S", 5.0)
+    started = threading.Event()
+
+    def runner(ctx: TaskContext) -> TaskOutcome:
+        started.set()
+        for _ in range(500):
+            if ctx.cancelled():
+                raise TaskCancelled()
+            time.sleep(0.01)
+        return TaskOutcome(status="done")
+
+    use_runner(runner)
+    db.create_task("t-polite", "parse", None, {})
+    scheduler.start()
+    assert started.wait(10)
+
+    scheduler.cancel("t-polite")
+    assert _wait_status(db, "t-polite", {"canceled"}) == "canceled"
+    _, total = db.query_events(level="warning", task_id="t-polite")
+    assert total == 0, "检查点响应的取消不该记强制 warning"
+    assert scheduler.snapshot()["abandoned"] == []
+
+
 def test_cancel_finished_task_is_noop(db: Database, scheduler: Scheduler, use_runner):
     use_runner(lambda ctx: TaskOutcome(status="done"))
     db.create_task("t-fin", "parse", None, {})
@@ -221,6 +301,55 @@ def test_cancel_missing_task(db: Database, scheduler: Scheduler):
     with pytest.raises(DocFactoryError) as excinfo:
         scheduler.cancel("does-not-exist")
     assert excinfo.value.code == "E03"
+
+
+# ---------------------------------------------------------------- 队列暂停
+
+
+def test_queue_pause_gates_dispatch_and_persists(
+    db: Database, scheduler: Scheduler, use_runner, settings_holder
+):
+    """暂停 = 暂停派发：排队任务**原地保留**（不取消不重建，task_id 稳定）；
+    开关持久化到 meta——新调度器实例（模拟引擎重启）必须恢复暂停态。"""
+    done = threading.Event()
+
+    def runner(ctx: TaskContext) -> TaskOutcome:
+        done.set()
+        return TaskOutcome(status="done")
+
+    use_runner(runner)
+    scheduler.set_paused(True)
+    db.create_task("t-held", "parse", None, {})
+    scheduler.start()
+    scheduler.notify()
+
+    assert not done.wait(0.8), "暂停期间不得派发任务"
+    assert db.get_task("t-held")["status"] == "queued", "排队任务应原地保留而非被取消"
+
+    restarted = Scheduler(db, scheduler.paths, settings_holder.get)
+    assert restarted.is_paused() is True, "暂停态必须在引擎重启后延续（meta 持久化）"
+
+    scheduler.set_paused(False)
+    assert _wait_status(db, "t-held", {"done"}) == "done"
+    assert done.is_set()
+
+
+def test_queue_pause_exempts_module_install(db: Database, scheduler: Scheduler, use_runner):
+    """模组安装不受暂停约束：用户点「验签并安装」期望立即有反馈。"""
+    def runner(ctx: TaskContext) -> TaskOutcome:
+        return TaskOutcome(status="done")
+
+    use_runner(runner)
+    scheduler.set_paused(True)
+    db.create_task("t-parse-held", "parse", None, {})
+    db.create_task("t-mod", "module_install", None, {})
+    scheduler.start()
+
+    assert _wait_status(db, "t-mod", {"done"}) == "done"
+    assert db.get_task("t-parse-held")["status"] == "queued"
+
+    scheduler.set_paused(False)
+    assert _wait_status(db, "t-parse-held", {"done"}) == "done"
 
 
 # ---------------------------------------------------------------- runner 解析

@@ -12,7 +12,15 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ApiError, EngineClient } from "./api";
-import { AppContext, PAGE_TITLES, type NavRequest, type PageId, type ToastAction } from "./appctx";
+import {
+  AppContext,
+  PAGE_TITLES,
+  type DensityChoice,
+  type NavRequest,
+  type PageId,
+  type ThemeChoice,
+  type ToastAction,
+} from "./appctx";
 import { Modal } from "./components/Modal";
 import { Workbench } from "./pages/Workbench";
 import { Library } from "./pages/Library";
@@ -121,6 +129,59 @@ export function App() {
   const toastSeq = useRef(0);
   const navSeq = useRef(0);
   const dragDepth = useRef(0);
+  const searchRef = useRef<HTMLInputElement | null>(null);
+
+  /* 外观偏好：纯本地（localStorage），与引擎设置无关；默认跟随系统 */
+  const [theme, setThemeState] = useState<ThemeChoice>(() => {
+    const v = window.localStorage.getItem("df.theme");
+    return v === "light" || v === "dark" || v === "system" ? v : "system";
+  });
+  const [density, setDensityState] = useState<DensityChoice>(() => {
+    const v = window.localStorage.getItem("df.density");
+    return v === "comfortable" ? "comfortable" : "compact";
+  });
+
+  const setTheme = useCallback((t: ThemeChoice) => {
+    setThemeState(t);
+    window.localStorage.setItem("df.theme", t);
+  }, []);
+  const setDensity = useCallback((d: DensityChoice) => {
+    setDensityState(d);
+    window.localStorage.setItem("df.density", d);
+  }, []);
+
+  /* 主题落到 <html data-theme>；跟随系统时监听系统深浅切换实时生效 */
+  useEffect(() => {
+    const root = document.documentElement;
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    const apply = () => {
+      const dark = theme === "dark" || (theme === "system" && mq.matches);
+      root.dataset.theme = dark ? "dark" : "light";
+    };
+    apply();
+    if (theme === "system") {
+      mq.addEventListener("change", apply);
+      return () => mq.removeEventListener("change", apply);
+    }
+    return undefined;
+  }, [theme]);
+
+  useEffect(() => {
+    document.documentElement.dataset.density = density;
+  }, [density]);
+
+  /* Ctrl/Cmd+K 聚焦全局搜索：现代桌面工具的肌肉记忆 */
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        searchRef.current?.focus();
+        searchRef.current?.select();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   const toast = useCallback((msg: string, kind: "info" | "ok" | "err" = "info", action?: ToastAction) => {
     const id = ++toastSeq.current;
@@ -247,8 +308,8 @@ export function App() {
   };
 
   const ctx = useMemo(
-    () => ({ client, engine, page, nav, navigate, toast }),
-    [client, engine, page, nav, navigate, toast],
+    () => ({ client, engine, page, nav, navigate, toast, theme, setTheme, density, setDensity }),
+    [client, engine, page, nav, navigate, toast, theme, setTheme, density, setDensity],
   );
 
   const engineState = engine?.status ?? "starting";
@@ -261,16 +322,21 @@ export function App() {
           按 07 章 §1「无强制向导」，只做一次性气泡，不做模态向导 */}
       <div className={`shell ${expanded ? "shell-expanded" : ""}`}>
         <nav className="sidebar" aria-label="主导航">
+          {/* 品牌块兼展开开关：赤陶橙方标是整个界面唯一的强色锚点 */}
           <button
             className="sidebar-toggle"
             onClick={() => setExpanded((v) => !v)}
             title={expanded ? "收起导航" : "展开导航"}
             aria-label={expanded ? "收起导航" : "展开导航"}
           >
-            <svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.6">
-              <path d="M4 6h12M4 10h12M4 14h12" strokeLinecap="round" />
-            </svg>
-            <span className="sidebar-text">DocFactory</span>
+            <span className="brand-mark">
+              <svg viewBox="0 0 20 20" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
+                <path d="M5.4 2.8h6.4l3 3v11.4H5.4z" strokeLinejoin="round" />
+                <path d="M11.8 2.8v3h3" strokeLinejoin="round" />
+                <path d="M8 10.2h4.2M8 13.2h4.2" strokeLinecap="round" />
+              </svg>
+            </span>
+            <span className="sidebar-text brand-name">DocFactory</span>
           </button>
           {NAV_ITEMS.map((it) => (
             <button
@@ -298,19 +364,29 @@ export function App() {
                 <path d="M10.4 10.4L14 14" strokeLinecap="round" />
               </svg>
               <input
+                ref={searchRef}
                 type="search"
                 value={search}
-                placeholder="搜索文档名 / 日志内容"
-                aria-label="全局搜索"
+                /* 文案只承诺文档名：这个框唯一的去处就是文档库。原文案「/ 日志内容」是空头支票——
+                   敲日志关键词只会跳到一个空的文档列表，比压根没有搜索框更伤人。
+                   顺带把「要按回车」写进去：非技术用户不会默认输入框需要提交 */
+                placeholder="搜索文档名，回车跳转文档库"
+                aria-label="全局搜索文档名"
                 onChange={(e) => setSearch(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key !== "Enter") return;
                   const q = search.trim();
                   if (!q) return;
-                  /* 全局搜索默认落在文档库；日志页自己也接受 q 参数 */
+                  /* 只投文档库，不按当前页分流：07 章 §1 里文档库与日志各自带筛选栏，
+                     按路由分流的话用户在这两页会同时看到两个功能重复的搜索框（还一个要回车、
+                     一个是实时防抖，行为还不一致）；而「从别处翻日志」在 07 章 §2 流程 B
+                     已有更准的入口——失败抽屉的「在日志中查看」带 task_id 直接定位，
+                     比拿关键词去撞日志文本靠谱。于是全局框收敛成一件事：跳文档库找文档。
+                     日志页的 nav 参数 q 因此保持无人调用，那是给将来别的入口留的通用契约。 */
                   navigate("library", { q });
                 }}
               />
+              <span className="topbar-kbd" aria-hidden="true">Ctrl K</span>
             </div>
             <div className={`engine-light engine-${engineState}`} title={engineLabel}>
               <span className="engine-dot" />

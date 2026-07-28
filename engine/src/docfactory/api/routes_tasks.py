@@ -10,6 +10,10 @@
 - GET  /tasks/{id}/events  SSE。事件序列由 scheduler.events() 产出（含补看历史与终态补发），
                            这里只负责按 SSE 文本格式拼块 + 关掉沿途缓冲。
 - POST /tasks/{id}/cancel  置取消标志；queued 任务直接落终态（语义见 scheduler.cancel）。
+- GET  /queue              队列状态：暂停开关 + queued/running 计数（工作台数据源）。
+- POST /queue/pause        body ``{paused}``。**引擎侧持久暂停**（meta 表，重启不丢）：
+                           排队任务原地保留不取消不重建，task_id 稳定、追溯链不断；
+                           正在跑的任务不打断；模组安装不受暂停约束。
 """
 
 from __future__ import annotations
@@ -131,6 +135,29 @@ async def task_event_stream(request: Request, task_id: str) -> StreamingResponse
 def cancel_task(request: Request, task_id: str) -> dict[str, Any]:
     """取消任务；running 任务在下一个检查点响应（10s 宽限见 scheduler）。"""
     return request.app.state.scheduler.cancel(task_id)
+
+
+class QueuePauseBody(BaseModel):
+    paused: bool
+
+
+@router.get("/queue")
+def queue_state(request: Request) -> dict[str, Any]:
+    """队列状态：暂停开关（引擎侧持久）+ queued/running 计数。"""
+    db = request.app.state.db
+    _, queued = db.list_tasks(status="queued", page=1, page_size=1)
+    _, running = db.list_tasks(status="running", page=1, page_size=1)
+    return {
+        "paused": request.app.state.scheduler.is_paused(),
+        "queued": queued,
+        "running": running,
+    }
+
+
+@router.post("/queue/pause")
+def queue_pause(request: Request, body: QueuePauseBody) -> dict[str, Any]:
+    """暂停/恢复队列派发。持久化到 meta：刷新页面、重开窗口、引擎重启都不丢。"""
+    return request.app.state.scheduler.set_paused(body.paused)
 
 
 # ---------------------------------------------------------------- 辅助

@@ -84,7 +84,7 @@ class ParseEnv:
     ctx: TaskContext | None = None
 
     page_count: int = 0                              # 解析器回填（PDF 页数 / slide 数 / sheet 数）
-    raw_char_total: int | None = None                # 原始文本层字符数（覆盖率分母，仅 PDF 有）
+    raw_char_total: int | None = None                # 文本层字符数（覆盖率分母：PDF/xlsx 由解析器累计，docx/pptx 由 raw_text 旁路统计）
     page_levels: Counter = field(default_factory=Counter)   # 级别 → 页数
     degraded_pages: set[int] = field(default_factory=set)
     ocr_pages: int = 0
@@ -329,6 +329,9 @@ def parse_document(
             parse_src, chain = convert_to_ooxml(src, out_dir=work_dir, target_ext=target)
             meta.convert_chain.append(chain)
             env.info(f"已归一化：{chain}", detail={"target": target})
+            if chain.endswith("(xlrd)"):
+                # 兜底路径的能力边界要留痕（降级透明原则）：单元格数据完整，图形内容不保留
+                env.info("本次 .xls 转换走 xlrd 兜底：保留单元格与合并信息，图片/图表不随转换保留")
             fmt = target
 
         module_path = _PARSERS.get(fmt)
@@ -348,11 +351,20 @@ def parse_document(
             env.degrade(1, "L2", "exception", f"{type(exc).__name__}: {exc}")
             env.builder = IRBuilder(meta)
             env.page_levels.clear()
+            env.raw_char_total = None  # 半途累计的分母作废，由兜底路径/旁路统计重算
             module.parse_text_fallback(parse_src, env)
 
         ir = env.builder.build()
         if not ir.nodes:
             raise DocFactoryError("E05", f"未能从「{src.name}」中提取到任何内容")
+
+        # docx/pptx 的覆盖率分母走旁路统计（raw_text 模块），不依赖解析器自报——
+        # 解析器漏抽的内容（脚注、SmartArt……）只有这样才会反映到指标上。
+        # PDF 由 pdf_parser 自算，xlsx 在单元格扫描时顺路累计，都已写入 env。
+        if env.raw_char_total is None and fmt in ("docx", "pptx"):
+            from docfactory.parsers.raw_text import raw_char_total
+
+            env.raw_char_total = raw_char_total(parse_src, fmt)
 
         _fill_metrics(ir, env)
         return ir
@@ -369,12 +381,14 @@ def _fill_metrics(ir: IRDocument, env: ParseEnv) -> None:
     # 主级别 = 占比最高的级别；解析器没登记过级别时按 L0（规则直解）算
     ir.doc.parse_level = env.page_levels.most_common(1)[0][0] if env.page_levels else "L0"  # type: ignore[assignment]
 
-    # 覆盖率：有原始文本层分母（PDF）时按定义算；规则直解（Office）无损，恒 1.0
+    # 覆盖率 = IR 字符数 / 源文件文本层字符数（分母来源见 parse_document 中的说明）。
+    # 分母为 0（纯图片文档等）时没有可丢的文本，记 1.0；分母**缺失**时记 None——
+    # UI 显示「—」。决不能回退成恒 1.0：那正是此前仪表盘系统性虚高的根源。
     if env.raw_char_total is not None:
         denom = env.raw_char_total
         m.text_coverage = min(1.0, ir_char_total(ir) / denom) if denom > 0 else 1.0
     else:
-        m.text_coverage = 1.0
+        m.text_coverage = None
 
     # 表格置信：M1 全部走规则路径（IR 契约规定规则路径恒 1.0）；
     # 接入 L0 TableFormer 后由模型 cell 置信均值覆盖。无表格则留空，UI 显示「—」。

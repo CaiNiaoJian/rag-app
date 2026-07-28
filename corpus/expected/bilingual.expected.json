@@ -1,0 +1,25 @@
+{
+  "sample": "bilingual.docx",
+  "note": "中英日混排 + 全角标点 / 上下标 / ℃ / ① 等非 ASCII 符号（08 章 §3.1「中英混排」）。这类字符在「Windows 控制台 GBK」「CSV 无 BOM」「MD 转义」三处都掉过链子，断言它们原样出现在 IR 里，编码问题才不用靠人记得去试。",
+  "must_not_fail": true,
+  "max_seconds": 10,
+  "expect": {
+    "node_counts": {
+      "section": 2,
+      "paragraph": 6
+    },
+    "headings": [
+      "Bilingual Test 中英混排测试",
+      "技术参数 Technical Specs"
+    ],
+    "text_contains": [
+      "七种格式 including PDF",
+      "-20℃ ~ +60℃",
+      "面积单位 m²",
+      "±0.5%",
+      "① 第一项 First item",
+      "日本語のテキストも含まれています",
+      "「全角括号」"
+    ]
+  }
+}

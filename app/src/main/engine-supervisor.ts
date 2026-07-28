@@ -212,7 +212,17 @@ export class EngineSupervisor {
 
   /** 开发模式跑 venv 里的 python -m docfactory.main；生产跑 PyInstaller 产物 */
   private resolveLaunch(token: string): EngineLaunch {
-    const common = ["--port", "0", "--token", token, "--data-dir", this.opts.dataRoot];
+    /* --parent-pid：用户在任务管理器里直接结束 DocFactory.exe 时，我们没机会发
+     * /shutdown，子进程会被过继给别人变成常驻孤儿（engine.exe 还会拖着 soffice.exe）。
+     * Windows 没有 PDEATHSIG，正规解法是 Job Object，但那要引原生模块——
+     * electron-builder 里 npmRebuild:false 正是为了躲开这个。所以改由引擎盯着我们：
+     * 见 engine/src/docfactory/parent_watch.py。 */
+    const common = [
+      "--port", "0",
+      "--token", token,
+      "--data-dir", this.opts.dataRoot,
+      "--parent-pid", String(process.pid),
+    ];
     if (this.opts.isPackaged) {
       const dir = join(process.resourcesPath, "engine");
       return { exe: join(dir, "engine.exe"), args: common, cwd: dir };

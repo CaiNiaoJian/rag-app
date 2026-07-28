@@ -57,7 +57,17 @@ _POLL_S = 0.2              # 空队列轮询与 SSE 拉取间隔
 _PROGRESS_WRITE_S = 0.5    # tasks.progress 落库节流（阶段变化不受此限，立即写）
 _EVENT_RETAIN_S = 120.0    # 任务终态后事件序列保留时长（供晚到的 SSE 订阅补看）
 _MAX_EVENTS_PER_TASK = 4000  # 单任务事件上限（超出丢弃最早的 progress，保留语义事件）
-_CANCEL_GRACE_S = 10.0     # 取消宽限（02 章 §2.1）：超时仍未响应则记 warning
+# 取消宽限（02 章 §2.1）：runner 若卡在无检查点的第三方调用（LibreOffice/大 PDF 读页）里，
+# 取消信号永远等不到响应。超过宽限即走强制路径：记 warning + 强标 canceled +
+# 弃用该 worker 线程（Python 杀不掉线程，与 run_with_timeout 同款取舍）+ 补位新 worker。
+_CANCEL_GRACE_S = 10.0
+
+# 队列暂停的持久化键（meta 表）：暂停状态与队列本体（tasks 表）同库共存亡，
+# 刷新页面、重开窗口、引擎重启都不丢——此前「暂停」只活在渲染进程内存里，
+# 还要靠「取消再重建」模拟，task_id 一变追溯链就断。
+_META_QUEUE_PAUSED = "queue_paused"
+# 暂停不拦模组安装：用户点「验签并安装」期望立即有反馈，且它不占解析资源
+_PAUSE_EXEMPT_TYPES: tuple[str, ...] = ("module_install",)
 
 
 class _TaskStream:
@@ -158,32 +168,79 @@ class Scheduler:
         self._cancelled: set[str] = set()          # 已请求取消的 task_id
         self._running: dict[str, float] = {}       # task_id → 开始时间（monotonic）
         self._progress_ts: dict[str, float] = {}   # task_id → 上次 progress 落库时刻
+        self._abandoned: set[str] = set()          # 取消超时被强制终态、线程已弃用的 task_id
+        self._watchdogs: dict[str, threading.Timer] = {}  # task_id → 取消宽限计时器
+
+        # 队列暂停开关：从 meta 恢复（引擎重启后暂停态延续，用户不会看到「凭空恢复派发」）
+        self._paused = threading.Event()
+        try:
+            if (db.get_meta(_META_QUEUE_PAUSED) or "0") == "1":
+                self._paused.set()
+        except Exception:
+            pass  # meta 表尚未就绪（空库未迁移）：按未暂停处理，migrate 后由 set_paused 落库
 
     # ------------------------------------------------------------ 生命周期
 
     def start(self) -> None:
         n = max(1, int(self._settings_provider().parallel_tasks))
-        for i in range(n):
-            t = threading.Thread(target=self._worker_loop, name=f"df-worker-{i}", daemon=True)
-            t.start()
-            self._threads.append(t)
+        for _ in range(n):
+            self._spawn_worker()
         logger.info(f"任务调度器启动：{n} 个 worker")
         self.notify()
+
+    def _spawn_worker(self) -> None:
+        with self._cancel_lock:
+            seq = len(self._threads)
+            t = threading.Thread(target=self._worker_loop, name=f"df-worker-{seq}", daemon=True)
+            self._threads.append(t)
+        t.start()
 
     def stop(self, timeout: float = 10.0) -> None:
         """请求停机：唤醒所有 worker 退出循环；在跑的任务会收到取消信号。"""
         self._stopping.set()
         with self._cancel_lock:
             self._cancelled.update(self._running.keys())
+            watchdogs = list(self._watchdogs.values())
+            self._watchdogs.clear()
+            threads = list(self._threads)
+        for timer in watchdogs:
+            timer.cancel()
         self._wake.set()
         deadline = time.monotonic() + timeout
-        for t in self._threads:
+        for t in threads:
             t.join(max(0.0, deadline - time.monotonic()))
         self._threads.clear()
 
     def notify(self) -> None:
         """有新任务入队时唤醒 worker（POST /tasks 与 /modules/install 调用）。"""
         self._wake.set()
+
+    # ------------------------------------------------------------ 队列暂停
+
+    def set_paused(self, paused: bool) -> dict[str, Any]:
+        """暂停/恢复队列派发（持久化到 meta，重启不丢）。
+
+        语义是「暂停派发」而非「取消重建」：排队任务原地保留（task_id 不变，
+        按 ID 追溯一次导入的链路不断），正在跑的任务不打断；
+        模组安装不受暂停约束（_PAUSE_EXEMPT_TYPES）。
+        """
+        changed = paused != self._paused.is_set()
+        if paused:
+            self._paused.set()
+        else:
+            self._paused.clear()
+        self.db.set_meta(_META_QUEUE_PAUSED, "1" if paused else "0")
+        if changed:
+            self.db.log_event(
+                level="info",
+                message="队列已暂停派发（排队任务原地等待）" if paused else "队列已恢复派发",
+            )
+        if not paused:
+            self.notify()
+        return {"paused": paused}
+
+    def is_paused(self) -> bool:
+        return self._paused.is_set()
 
     # ------------------------------------------------------------ 取消
 
@@ -207,12 +264,53 @@ class Scheduler:
             self.db.log_event(level="info", task_id=task_id, doc_id=row.get("doc_id"),
                               message="任务已取消（排队中）")
             return {"task_id": task_id, "status": "canceled", "canceled": True}
+
+        self._arm_cancel_watchdog(task_id, row.get("doc_id"))
         return {"task_id": task_id, "status": "running", "canceled": True,
                 "message": "已发出取消信号，任务将在下一个检查点停止"}
 
     def is_cancelled(self, task_id: str) -> bool:
         with self._cancel_lock:
             return task_id in self._cancelled
+
+    def _arm_cancel_watchdog(self, task_id: str, doc_id: str | None) -> None:
+        """取消宽限计时：到点仍在跑就走 `_force_cancel`。重复取消不叠加计时器。"""
+        with self._cancel_lock:
+            if task_id in self._watchdogs or self._stopping.is_set():
+                return
+            timer = threading.Timer(_CANCEL_GRACE_S, self._force_cancel, args=(task_id, doc_id))
+            timer.daemon = True
+            self._watchdogs[task_id] = timer
+        timer.start()
+
+    def _force_cancel(self, task_id: str, doc_id: str | None) -> None:
+        """宽限超时的强制兜底：runner 卡在无检查点的第三方调用里，取消信号永远悬空。
+
+        Python 杀不掉线程，能做的是：① 任务强标 canceled（用户意图已达成，不再显示
+        永远的 running）；② 广播终态事件（UI/SSE 拿到确定性收尾）；③ 弃用该 worker
+        线程——其迟到的结果会被丢弃（见 `_execute`），取消标志保持置位，卡死的调用
+        一旦返回就会在下个检查点自行退出；④ 立刻补位一个新 worker，并发槽不泄漏。
+        """
+        with self._cancel_lock:
+            self._watchdogs.pop(task_id, None)
+            if self._stopping.is_set() or task_id not in self._running:
+                return  # 已在宽限期内自行停下，或引擎正在停机
+            self._abandoned.add(task_id)
+
+        # 写入顺序是契约：解释性 warning 先于终态落库，终态先于 SSE 终态事件——
+        # 任何一侧（轮询 tasks 表 / 订阅 SSE）看到「已取消」时，原因日志必然已可查。
+        try:
+            self.db.log_event(
+                level="warning", task_id=task_id, doc_id=doc_id, code="E06",
+                message=f"取消信号超过 {_CANCEL_GRACE_S:.0f}s 未被响应，已强制标记为已取消",
+                detail={"note": "工作线程已弃用并补位；被卡住的第三方调用返回后其结果将被丢弃"},
+            )
+            self.db.update_task(task_id, status="canceled", ended_at=now_iso())
+        except Exception as exc:  # 强制路径不能因落库失败而半途而废
+            logger.exception(f"强制取消落库失败 task={task_id}：{exc}")
+        self.bus.publish(task_id, EVENT_DONE, {"status": "canceled", "message": "任务已取消（超时强制）"})
+        logger.warning(f"任务 {task_id} 取消超时：worker 线程已弃用，已补位新 worker")
+        self._spawn_worker()
 
     # ------------------------------------------------------------ SSE
 
@@ -251,7 +349,9 @@ class Scheduler:
         while not self._stopping.is_set():
             task = None
             try:
-                task = self.db.claim_next_queued()
+                # 暂停期间只放行豁免类型（模组安装），解析/导出等留在队列原地等待
+                only = _PAUSE_EXEMPT_TYPES if self._paused.is_set() else None
+                task = self.db.claim_next_queued(only_types=only)
             except Exception as exc:  # 数据库瞬时故障不该打死 worker
                 logger.exception(f"领取任务失败：{exc}")
             if task is None:
@@ -261,11 +361,13 @@ class Scheduler:
             # 还有任务时立刻放行其他 worker（wait 的那个会马上再抢一轮）
             self._wake.set()
             try:
-                self._execute(task)
+                if self._execute(task):
+                    return  # 本线程曾被取消宽限判定为卡死并已补位：迟到返回后安静退役
             except Exception as exc:  # 兜底：_execute 内部已收口，这里只防意外
                 logger.exception(f"任务执行框架异常 task={task.get('id')}：{exc}")
 
-    def _execute(self, task: dict[str, Any]) -> None:
+    def _execute(self, task: dict[str, Any]) -> bool:
+        """执行一个任务；返回 True 表示本线程已被弃用（调用方应退出循环）。"""
         task_id: str = task["id"]
         doc_id: str | None = task.get("doc_id")
         task_type: str = task["type"]
@@ -275,7 +377,7 @@ class Scheduler:
             if task_id in self._cancelled:
                 self.db.update_task(task_id, status="canceled", ended_at=now_iso())
                 self.bus.publish(task_id, EVENT_DONE, {"status": "canceled", "message": "任务已取消"})
-                return
+                return False
             self._running[task_id] = time.monotonic()
 
         log = logger.bind(task_id=task_id, doc_id=doc_id)
@@ -314,11 +416,25 @@ class Scheduler:
             outcome = TaskOutcome(status="failed", error_code="E06", message=str(exc))
         finally:
             with self._cancel_lock:
+                abandoned = task_id in self._abandoned
+                self._abandoned.discard(task_id)
                 self._running.pop(task_id, None)
                 self._cancelled.discard(task_id)
+                timer = self._watchdogs.pop(task_id, None)
+            if timer is not None:
+                timer.cancel()  # 宽限期内自行停下：撤掉计时器，别再走强制路径
             self._progress_ts.pop(task_id, None)
 
+        if abandoned:
+            # 终态早已由 _force_cancel 落库并广播；这里的结果是弃用线程的迟到产物，
+            # 一律丢弃——并发槽已被补位，本线程继续领任务只会超出并发度上限
+            logger.bind(task_id=task_id).warning(
+                f"被弃用的任务线程最终返回，迟到结果已丢弃（{outcome.status}）"
+            )
+            return True
+
         self._finish(task_id, doc_id, outcome)
+        return False
 
     def _finish(self, task_id: str, doc_id: str | None, outcome: TaskOutcome) -> None:
         fields: dict[str, Any] = {"status": outcome.status, "ended_at": now_iso()}
@@ -346,6 +462,9 @@ class Scheduler:
 
     def _on_progress(self, task_id: str, event: str, data: dict[str, Any]) -> None:
         """runner 的进度回调：进事件总线（实时）+ 节流落库（供刷新页面后仍看得到）。"""
+        with self._cancel_lock:
+            if task_id in self._abandoned:
+                return  # 弃用线程的迟到进度：任务已被强制终态，不再污染事件流与库
         self.bus.publish(task_id, event, data)
 
         fields: dict[str, Any] = {}
@@ -379,8 +498,10 @@ class Scheduler:
         with self._cancel_lock:
             return {
                 "workers": len(self._threads),
+                "paused": self._paused.is_set(),
                 "running": sorted(self._running),
                 "cancelling": sorted(self._cancelled),
+                "abandoned": sorted(self._abandoned),
             }
 
 

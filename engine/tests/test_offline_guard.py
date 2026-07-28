@@ -120,3 +120,31 @@ def test_disable_env_var_skips_installation():
     """)
     proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=60)
     assert "UNPATCHED" in proc.stdout, proc.stderr
+
+
+def test_disable_env_var_ignored_when_frozen():
+    """打包产物里逃生门必须失效。
+
+    这条守的是 FR-17「代码层面强制禁止外联」：环境变量是用户可写的，而主进程
+    spawn 引擎时会把整个 process.env 传下去，所以「约定生产不设这个变量」根本
+    不是防线。sys.frozen 由 PyInstaller 的 bootloader 注入，这里手动置上以模拟
+    打包态——闸必须照装不误。
+    """
+    code = textwrap.dedent("""
+        import os, socket, sys
+        os.environ["DOCFACTORY_DISABLE_OFFLINE_GUARD"] = "1"
+        sys.frozen = True          # 模拟 PyInstaller 打包产物
+        from docfactory import offline_guard
+        before = socket.socket.connect
+        offline_guard.install()
+        if socket.socket.connect is before:
+            print("ESCAPED")      # 逃生门在打包态仍生效 —— 硬约束失守
+        else:
+            s = socket.socket(); s.settimeout(3)
+            try:
+                s.connect(("8.8.8.8", 53)); print("NOT_BLOCKED")
+            except OSError as exc:
+                print("BLOCKED" if "offline guard: blocked" in str(exc) else f"OTHER:{exc}")
+    """)
+    proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=60)
+    assert "BLOCKED" in proc.stdout, proc.stderr

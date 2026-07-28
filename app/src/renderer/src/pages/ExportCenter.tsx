@@ -479,66 +479,77 @@ export function ExportCenter() {
                   </label>
                 </div>
 
+                {/* 未勾选对应格式时整组折叠成一句提示：半透明的「灰雾参数」只会添乱 */}
                 <div className={`param-group ${formats.has("pdf") ? "" : "param-group-off"}`}>
                   <div className="param-group-title">PDF</div>
-                  <label className="field">
-                    <span className="field-label">正文字号 {settings.pdf_export.font_size}pt</span>
-                    <input
-                      type="range"
-                      min={9}
-                      max={16}
-                      step={1}
-                      disabled={!formats.has("pdf")}
-                      value={settings.pdf_export.font_size}
-                      onChange={(e) => patchPdf({ font_size: Number(e.target.value) })}
-                    />
-                  </label>
-                  <label className="switch switch-block">
-                    <input
-                      type="checkbox"
-                      disabled={!formats.has("pdf")}
-                      checked={settings.pdf_export.header_footer}
-                      onChange={(e) => patchPdf({ header_footer: e.target.checked })}
-                    />
-                    使用内置页眉页脚
-                  </label>
+                  {formats.has("pdf") ? (
+                    <>
+                      <label className="field">
+                        <span className="field-label">正文字号 {settings.pdf_export.font_size}pt</span>
+                        <input
+                          type="range"
+                          min={9}
+                          max={16}
+                          step={1}
+                          value={settings.pdf_export.font_size}
+                          onChange={(e) => patchPdf({ font_size: Number(e.target.value) })}
+                        />
+                      </label>
+                      <label className="switch switch-block">
+                        <input
+                          type="checkbox"
+                          checked={settings.pdf_export.header_footer}
+                          onChange={(e) => patchPdf({ header_footer: e.target.checked })}
+                        />
+                        使用内置页眉页脚
+                      </label>
+                    </>
+                  ) : (
+                    <div className="param-off-hint">勾选「PDF」格式后可调整排版参数</div>
+                  )}
                 </div>
 
                 <div className={`param-group ${formats.has("alpaca") || formats.has("sharegpt") ? "" : "param-group-off"}`}>
                   <div className="param-group-title">数据集</div>
-                  <label className="field">
-                    <span className="field-label">文件格式</span>
-                    <select
-                      className="select"
-                      value={settings.dataset.file_format}
-                      onChange={(e) => patchDataset({ file_format: e.target.value as "json" | "csv" })}
-                    >
-                      <option value="json">JSON</option>
-                      <option value="csv">CSV</option>
-                    </select>
-                  </label>
-                  <label className="field">
-                    <span className="field-label">生成方式</span>
-                    <select
-                      className="select"
-                      value={settings.dataset.mode}
-                      onChange={(e) => patchDataset({ mode: e.target.value as "blank" | "rule" })}
-                    >
-                      <option value="blank">留空模板（推荐，供人工标注）</option>
-                      <option value="rule">规则生成（实验性，质量有限）</option>
-                    </select>
-                  </label>
-                  <label className="field">
-                    <span className="field-label">每个切片生成条数</span>
-                    <input
-                      className="input input-sm"
-                      type="number"
-                      min={1}
-                      max={5}
-                      value={settings.dataset.per_chunk}
-                      onChange={(e) => patchDataset({ per_chunk: Math.max(1, Number(e.target.value) || 1) })}
-                    />
-                  </label>
+                  {formats.has("alpaca") || formats.has("sharegpt") ? (
+                    <>
+                      <label className="field">
+                        <span className="field-label">文件格式</span>
+                        <select
+                          className="select"
+                          value={settings.dataset.file_format}
+                          onChange={(e) => patchDataset({ file_format: e.target.value as "json" | "csv" })}
+                        >
+                          <option value="json">JSON</option>
+                          <option value="csv">CSV</option>
+                        </select>
+                      </label>
+                      <label className="field">
+                        <span className="field-label">生成方式</span>
+                        <select
+                          className="select"
+                          value={settings.dataset.mode}
+                          onChange={(e) => patchDataset({ mode: e.target.value as "blank" | "rule" })}
+                        >
+                          <option value="blank">留空模板（推荐，供人工标注）</option>
+                          <option value="rule">规则生成（实验性，质量有限）</option>
+                        </select>
+                      </label>
+                      <label className="field">
+                        <span className="field-label">每个切片生成条数</span>
+                        <input
+                          className="input input-sm"
+                          type="number"
+                          min={1}
+                          max={5}
+                          value={settings.dataset.per_chunk}
+                          onChange={(e) => patchDataset({ per_chunk: Math.max(1, Number(e.target.value) || 1) })}
+                        />
+                      </label>
+                    </>
+                  ) : (
+                    <div className="param-off-hint">勾选「Alpaca / ShareGPT 数据集」格式后可调整生成参数</div>
+                  )}
                 </div>
 
                 <div className="param-group">

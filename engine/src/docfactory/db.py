@@ -108,6 +108,21 @@ class Database:
                 out.append((int(m.group(1)), entry.read_text(encoding="utf-8")))
         return out
 
+    # ------------------------------------------------ meta（引擎级持久开关/标记）
+
+    def get_meta(self, key: str) -> str | None:
+        with self.connect() as conn:
+            row = conn.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+            return row["value"] if row else None
+
+    def set_meta(self, key: str, value: str) -> None:
+        with self._write_lock, self.connect() as conn:
+            conn.execute(
+                "INSERT INTO meta(key, value) VALUES(?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (key, value),
+            )
+
     # ------------------------------------------------ documents
 
     def insert_document(self, doc: dict[str, Any]) -> None:
@@ -224,11 +239,21 @@ class Database:
             ).fetchall()
         return [dict(r) for r in rows], total
 
-    def claim_next_queued(self) -> dict[str, Any] | None:
-        """原子领取最早的 queued 任务（置 running），无任务返回 None。"""
+    def claim_next_queued(self, only_types: tuple[str, ...] | None = None) -> dict[str, Any] | None:
+        """原子领取最早的 queued 任务（置 running），无任务返回 None。
+
+        ``only_types`` 限定可领取的类型——队列暂停时只放行不受暂停约束的类型
+        （scheduler._PAUSE_EXEMPT_TYPES），其余任务留在队列里原地等待。
+        """
+        type_where = ""
+        args: list[Any] = []
+        if only_types:
+            type_where = f" AND type IN ({','.join('?' * len(only_types))})"
+            args = list(only_types)
         with self._write_lock, self.connect() as conn:
             row = conn.execute(
-                "SELECT * FROM tasks WHERE status='queued' ORDER BY created_at, id LIMIT 1"
+                f"SELECT * FROM tasks WHERE status='queued'{type_where} ORDER BY created_at, id LIMIT 1",
+                args,
             ).fetchone()
             if row is None:
                 return None

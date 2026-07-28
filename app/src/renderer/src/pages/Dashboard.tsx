@@ -17,25 +17,24 @@ import { EmptyState } from "../components/EmptyState";
 import type { DashboardStats } from "../types";
 import { fmtMs, fmtPct } from "../util";
 
-/* 图表色必须与 styles.css 的令牌同值 —— SVG 里没法用 var()，只能手动同步。
- * 全部写成 oklch()：与令牌逐字符对得上，将来改色相只需要两处一起改。
- * 分类色不是「六个好看的颜色」，而是同一色相上的明度阶梯 + 两档中性收尾：
- * 类别本身没有语义差别（pdf 不比 docx「更重要」），用色相区分反而在暗示优先级。 */
-const BRAND = "oklch(0.545 0.176 265)";
-const OK = "oklch(0.58 0.125 152)";
-const WARN = "oklch(0.66 0.13 72)";
-const ERR = "oklch(0.575 0.165 24)";
+/* 图表色直接引用 styles.css 的 --chart-* 令牌：SVG 的 fill/stroke 属性支持 var()，
+ * 深浅主题切换时图表随令牌自动翻转，无需两处同步。
+ * 分类色是以赤陶橙为首的暖色序列：类别无语义差别时按序取用。 */
+const BRAND = "var(--chart-1)";
+const OK = "var(--ok)";
+const WARN = "var(--warn)";
+const ERR = "var(--err)";
 const NEUTRAL = [
-  "oklch(0.545 0.176 265)",
-  "oklch(0.635 0.145 265)",
-  "oklch(0.725 0.105 265)",
-  "oklch(0.815 0.065 265)",
-  "oklch(0.70 0.02 265)",
-  "oklch(0.82 0.012 265)",
+  "var(--chart-1)",
+  "var(--chart-2)",
+  "var(--chart-3)",
+  "var(--chart-4)",
+  "var(--chart-5)",
+  "var(--chart-6)",
 ];
-/* 图表里的轨道与基线：与 --surface-sunken / --line 同值 */
-const TRACK = "oklch(0.948 0.007 265)";
-const AXIS = "oklch(0.906 0.008 265)";
+/* 图表里的轨道与基线 */
+const TRACK = "var(--chart-track)";
+const AXIS = "var(--chart-axis)";
 
 interface Pair {
   /* 业务键（E01 / L0 / pdf …）：跳转与取数用 */
@@ -43,6 +42,9 @@ interface Pair {
   value: number;
   /* 服务端给的图例文案（「E01 文件似乎已损坏」）：展示优先用它 */
   label?: string;
+  /* 同一行的次级数值（目前只有中位耗时）：跟在主值后面以浅色显示，不参与柱长计算。
+     用它去排柱长会让「平均」和「中位」看起来在互相比大小，而它们是同一批样本的两个口径。 */
+  sub?: number;
 }
 
 /* 引擎的切片直方图按 token 分桶；面向非技术用户要换成字符口径（07 章：token 收进技术详情）。

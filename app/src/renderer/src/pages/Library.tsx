@@ -327,8 +327,14 @@ export function Library() {
     return () => window.clearTimeout(timer);
   }, [load]);
 
-  /* 时间筛选在前端做：引擎列表端点只认 status/fmt/q，
-   * 再为「近 7 天」加一个查询参数会让契约变复杂，收益不大 */
+  /* 时间筛选只能作用于**当前页**：引擎 GET /documents 只认 status/fmt/q/page/page_size
+   * （engine/src/docfactory/api/routes_documents.py::list_documents），没有时间范围参数，
+   * 前端手上只有这 50 条，无从代表全库。
+   * 这里刻意不装成全库筛选——UI 上如实标明「仅筛选当前页」并给出「N 条中显示 M 条」。
+   * 谎报的代价很实在：用户看到「最近 7 天」只剩 3 条，会以为上周导的文件丢了。
+   * 引擎侧要补的是 list_documents 增加 created_after/created_before（ISO8601 字符串）两个 Query，
+   * 下沉到 db.list_documents 的 WHERE created_at >= ? / <= ?；补齐后这里改为随 params 下发，
+   * 并删掉本段前端过滤与下面的「仅当前页」提示。 */
   const visible = useMemo(() => {
     if (!since) return rows;
     const days = Number(since);
@@ -338,6 +344,10 @@ export function Library() {
       return isFinite(t) ? t >= from : true;
     });
   }, [rows, since]);
+
+  /* 整页被时间筛选滤空时，「还没有文档」是彻头彻尾的谎话：库里明明有，只是不在这一页。
+   * 这种空态会直接把用户推去重新导入已经存在的文件。 */
+  const emptyByTimeFilter = since !== "" && rows.length > 0 && visible.length === 0;
 
   // ---------------- 预览 ----------------
 
@@ -562,6 +572,10 @@ export function Library() {
     /* 页数以实际生成的快照数为准；没生成快照时退回文档页数（图片会各自显示占位） */
     const pageCount = preview.previewPages || d.page_cnt || 0;
     const pages = pageCount > 0 ? Array.from({ length: pageCount }, (_, i) => i + 1) : [];
+    /* 三栏的数据出自同一次 openPreview，载入判定必须共用。
+     * 只 gate 中栏的话，载入期左栏先闪「暂无结构信息」、右栏先闪「暂无渲染结果」，
+     * 用户会把这一瞬当成解析失败——空态文案在数据还没到时出现，比多转半秒圈子伤人得多。 */
+    const colLoading = <div className="col-empty">正在载入…</div>;
     return (
       <div className="page page-preview">
         <header className="preview-head">
@@ -586,7 +600,8 @@ export function Library() {
               <span className="metric-value"><LevelBadge level={d.parse_level} /></span>
             </div>
             <Metric label="降级页" value={String(d.degraded_pages ?? 0)} tone={(d.degraded_pages ?? 0) > 0 ? "warn" : "ok"} />
-            <Metric label="切片数" value={String(preview.chunks.length)} tone="none" />
+            {/* 同上：切片是三栏里最后到的数据，载入期给「…」而不是「0」 */}
+            <Metric label="切片数" value={preview.loading ? "…" : String(preview.chunks.length)} tone="none" />
           </div>
           <label className="switch">
             <input type="checkbox" checked={syncScroll} onChange={(e) => setSyncScroll(e.target.checked)} />
@@ -618,7 +633,9 @@ export function Library() {
           <aside className="preview-col preview-tree">
             <div className="col-head">结构</div>
             <div className="col-scroll">
-              {preview.tree.length ? (
+              {preview.loading ? (
+                colLoading
+              ) : preview.tree.length ? (
                 <Tree items={preview.tree} selectedId={selected} onSelect={onSelectNode} />
               ) : (
                 <div className="col-empty">暂无结构信息</div>
@@ -630,7 +647,7 @@ export function Library() {
             <div className="col-head">原文</div>
             <div className="col-scroll" ref={midRef} onScroll={() => onSyncScroll("mid")}>
               {preview.loading ? (
-                <div className="col-empty">正在载入…</div>
+                colLoading
               ) : pages.length ? (
                 pages.map((p) => <PageImage key={p} docId={d.id} page={p} previewDir={preview.previewDir} />)
               ) : (
@@ -645,11 +662,14 @@ export function Library() {
                 解析结果
               </button>
               <button className={`tab ${rightTab === "chunks" ? "tab-active" : ""}`} onClick={() => setRightTab("chunks")}>
-                切片边界（{preview.chunks.length}）
+                {/* 载入期切片还没取回来，写死的「（0）」等于告诉用户「这文档没切片」 */}
+                切片边界（{preview.loading ? "…" : preview.chunks.length}）
               </button>
             </div>
             <div className="col-scroll" ref={rightRef} onScroll={() => onSyncScroll("right")}>
-              {rightTab === "md" ? (
+              {preview.loading ? (
+                colLoading
+              ) : rightTab === "md" ? (
                 preview.md ? (
                   <MdView source={preview.md} resolveUrl={resolveAsset} />
                 ) : (
@@ -717,21 +737,45 @@ export function Library() {
           <option value="warning">警告</option>
           <option value="failed">失败</option>
         </select>
-        <select className="select" value={since} aria-label="按时间筛选" onChange={(e) => setSince(e.target.value)}>
+        {/* optgroup 的分组标题在下拉展开时就把「只筛当前页」说清楚，用户不必先选一次才发现 */}
+        <select
+          className="select"
+          value={since}
+          aria-label="按时间筛选（仅作用于当前页）"
+          title="引擎列表端点暂不支持时间范围，此筛选只在当前页已加载的记录中生效"
+          onChange={(e) => setSince(e.target.value)}
+        >
           <option value="">全部时间</option>
-          <option value="1">最近 1 天</option>
-          <option value="7">最近 7 天</option>
-          <option value="30">最近 30 天</option>
+          <optgroup label="仅筛选当前页">
+            <option value="1">最近 1 天</option>
+            <option value="7">最近 7 天</option>
+            <option value="30">最近 30 天</option>
+          </optgroup>
         </select>
         <button className="btn btn-sm" onClick={() => void load()}>刷新</button>
+        {since !== "" && (
+          /* 具体数字比一句「仅当前页」更有说服力：用户能立刻判断该翻页还是该放宽条件 */
+          <span className="hint-dim">
+            时间筛选仅作用于当前页：{rows.length} 条中显示 {visible.length} 条
+          </span>
+        )}
       </div>
 
       {visible.length === 0 ? (
         <EmptyState
-          title={loading ? "正在读取文档库…" : "还没有文档"}
-          hint="把文件拖到这里，或到工作台导入"
+          title={
+            loading ? "正在读取文档库…" : emptyByTimeFilter ? "当前页没有符合该时间范围的文档" : "还没有文档"
+          }
+          hint={
+            emptyByTimeFilter
+              ? "时间筛选只在当前页生效，翻到其他页或放宽时间范围再看看"
+              : "把文件拖到这里，或到工作台导入"
+          }
         >
-          <button className="btn btn-primary" onClick={() => navigate("workbench")}>去工作台导入</button>
+          {/* 库里明明有文档、只是被本页时间筛选滤掉了，这时候劝人去「导入」是南辕北辙 */}
+          {!emptyByTimeFilter && (
+            <button className="btn btn-primary" onClick={() => navigate("workbench")}>去工作台导入</button>
+          )}
         </EmptyState>
       ) : (
         <div className="table-wrap">

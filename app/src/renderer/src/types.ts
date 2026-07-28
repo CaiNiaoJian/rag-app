@@ -200,13 +200,33 @@ export interface IRDocument {
 
 // ---------------- 仪表盘聚合（GET /stats/dashboard，字段缺失时 UI 占位） ----------------
 
+/* 每文档切片数 TOP N（routes_stats.py `_chunk_stats` 的 per_doc）。
+ * 这里是整个 DashboardStats 里唯一逐字段声明的聚合：其余分布都只被通用图表按
+ * label/count 两个键消费，写死结构反而挡住服务端加列；而这一张图还要拿 doc_id
+ * 跳转到具体文档——同名文件在资料库里再常见不过，退而用 name 当标识会点开另一份。
+ * count 与 chunks 同值（通用图表只认 count，chunks 是给读代码的人看的），
+ * tokens 是该文档全部切片的 token 总量。 */
+export interface ChunkPerDocRow {
+  doc_id: string;
+  name: string | null;
+  label: string;
+  chunks: number;
+  count: number;
+  tokens: number;
+}
+
 export interface DashboardStats {
   cards?: Record<string, number | null>;
   fmt_dist?: unknown;
   status_dist?: unknown;
   level_dist?: unknown;
+  /* 07 章 §3 的「切片分布」是两半：chunk_hist 是长度直方图，chunk_per_doc 是每文档切片数。
+     早先只声明了前者，于是引擎白算了一份 TOP20——类型里没有的字段，页面也想不起来画。 */
   chunk_hist?: unknown;
+  chunk_per_doc?: ChunkPerDocRow[];
   fail_top?: unknown;
+  /* 按任务类型的耗时：[{type,label,value,samples,avg_ms,p50_ms}]，value 即 avg_ms。
+     整体平均/中位不在这里，引擎把它们并进了 cards.avg_duration_ms / p50_duration_ms。 */
   duration?: unknown;
   trend?: unknown;
 }

@@ -37,6 +37,7 @@ from docfactory.app import SettingsHolder, create_app  # noqa: E402
 from docfactory.config import Paths, default_data_root  # noqa: E402
 from docfactory.db import Database  # noqa: E402
 from docfactory.logsetup import setup_logging  # noqa: E402
+from docfactory.parent_watch import watch as watch_parent  # noqa: E402
 from docfactory.scheduler import Scheduler  # noqa: E402
 
 _STARTUP_TIMEOUT_S = 15.0  # 与主进程侧的启动超时保持一致（02 章 §1.1）
@@ -47,6 +48,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--port", type=int, default=0, help="监听端口，0 表示由 OS 随机分配")
     parser.add_argument("--token", default=None, help="Bearer 凭据；未提供时自动生成并随 READY 回传")
     parser.add_argument("--data-dir", default=None, help="数据根目录（默认 %%LOCALAPPDATA%%\\DocFactory）")
+    parser.add_argument(
+        "--parent-pid",
+        type=int,
+        default=0,
+        help="父进程 PID；该进程消失时引擎自动收工（防止主进程被强杀后留下孤儿）",
+    )
     parser.add_argument("--version", action="version", version=ENGINE_VERSION)
     return parser.parse_args(argv)
 
@@ -132,10 +139,17 @@ def main(argv: list[str] | None = None) -> int:
         if srv is not None:
             srv.should_exit = True
 
-    app = create_app(
-        db=db, paths=paths, settings=settings, scheduler=scheduler,
-        token=token, request_shutdown=request_shutdown,
-    )
+    try:
+        app = create_app(
+            db=db, paths=paths, settings=settings, scheduler=scheduler,
+            token=token, request_shutdown=request_shutdown,
+        )
+    except Exception as exc:
+        # 打包产物缺路由模块会走到这里（app.create_app 在 frozen 下硬失败）：
+        # 明确退非零码交给 EngineSupervisor 报 E06，而不是带着残缺的 API 面起来
+        sys.stderr.write(f"engine app assembly failed: {type(exc).__name__}: {exc}\n")
+        logger.exception(f"引擎装配失败：{exc}")
+        return 2
 
     config = uvicorn.Config(
         app,
@@ -152,6 +166,10 @@ def main(argv: list[str] | None = None) -> int:
     ready: dict[str, Any] = {"pid": os.getpid()}
     if generated:
         ready["token"] = token
+
+    # 父进程守望：主进程被任务管理器强杀时没机会发 /shutdown，这条路兜住它，
+    # 避免 engine.exe 与它派生的 soffice.exe 一起变成常驻孤儿（08 章 §3.3）
+    watch_parent(int(args.parent_pid), request_shutdown)
 
     scheduler.start()
     try:
