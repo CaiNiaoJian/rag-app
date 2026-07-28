@@ -1,0 +1,18 @@
+{
+  "sample": "sparse_regions.xlsx",
+  "note": "单 sheet 内三块不连续数据区域（两块纵向堆叠 + 一块横向错开），验证 sheet_region 切分（03 章 §7）。真实 Excel 极少是「一个 sheet 一张干净的表」；整 sheet 当一张表读，空行会把列对齐冲掉，两块不相干的数据也会被切进同一个 chunk。",
+  "must_not_fail": true,
+  "max_seconds": 20,
+  "expect": {
+    "node_counts": {
+      "sheet": 1,
+      "sheet_region": 3
+    },
+    "text_contains": [
+      "一季度收入",
+      "重点客户明细",
+      "华东能源集团",
+      "毛利率"
+    ]
+  }
+}

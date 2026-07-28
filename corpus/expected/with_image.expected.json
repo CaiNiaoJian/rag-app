@@ -1,0 +1,21 @@
+{
+  "sample": "with_image.docx",
+  "note": "两张内嵌图片：验证 figure 节点抽取与图片落 assets 目录（05 章 §1 的 MD 相对路径引用）。图片丢失时 MD 里会留下指向不存在文件的链接，比不导出更糟——断言 figure 数量是这条链路的第一道闸。",
+  "must_not_fail": true,
+  "max_seconds": 10,
+  "expect": {
+    "node_counts": {
+      "section": 1,
+      "figure": 2
+    },
+    "headings": [
+      "架构图示"
+    ],
+    "text_contains": [
+      "下图为系统整体架构",
+      "图 1 系统架构图",
+      "图中蓝色部分为本次交付范围",
+      "图 2 部署拓扑"
+    ]
+  }
+}

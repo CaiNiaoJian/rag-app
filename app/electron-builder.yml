@@ -1,0 +1,92 @@
+# electron-builder 打包配置（08 章 §2 打包与部署）。
+#
+# 核心取舍：
+# - NSIS oneClick + perMachine:false → 装到 %LOCALAPPDATA%\Programs，UAC 不弹窗、免管理员。
+#   VC++ CRT DLL 随 PyInstaller onedir 一起带，不跑需要管理员权限的 vc_redist。
+# - publish 置空：离线产品不允许存在任何自动更新/发布上传通道（02 章 §7）。
+# - 引擎以 extraResources 打进 resources\engine\，主进程按
+#   process.resourcesPath/engine/engine.exe 拉起（见 engine-supervisor.ts）。
+
+appId: com.docfactory.app
+productName: DocFactory
+copyright: Copyright © 2026 DocFactory Team
+
+directories:
+  output: dist
+  buildResources: build
+
+# 只打构建产物与 package.json；源码、sourcemap、文档不进包
+files:
+  - out/**/*
+  - package.json
+  - "!**/*.map"
+  - "!**/*.ts"
+  - "!**/*.md"
+
+asar: true
+
+# 引擎产物目录（PyInstaller onedir）。出包前必须先跑：
+#   cd engine && uv run pyinstaller docfactory.spec --noconfirm
+# 目录不存在时 electron-builder 会在此处报「源目录不存在」。CI 里由 package job
+# 从 engine job 的 artifact 取回到同一相对路径（见 .github/workflows/ci.yml）。
+# 安装后的最终位置：<安装目录>\resources\engine\engine.exe
+#
+# 第三方许可声明（署名义务，03 章 §6）随引擎目录一起进包：CI 的许可证扫描步骤
+# 把 THIRD-PARTY-NOTICES.txt 写进 engine/dist/engine/，本地出包想带上它则运行：
+#   cd engine && uv run python scripts/license_scan.py --notices dist/engine/THIRD-PARTY-NOTICES.txt
+# package job 的体积门禁会核验它存在于 resources\engine\ 下。
+extraResources:
+  - from: ../engine/dist/engine
+    to: engine
+    filter:
+      - "**/*"
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  # 免管理员安装的前提：主程序不要求提权
+  requestedExecutionLevel: asInvoker
+  artifactName: ${productName}-${version}-win-x64-setup.${ext}
+  # icon: build/icon.ico   # M5 补品牌图标后启用（文件不存在时 electron-builder 会报错）
+
+  # ⚠️ Windows 长路径（08 章 §2「路径边界」）：
+  # electron-builder 没有直接开关，需要在 afterPack 钩子里用 mt.exe / rcedit 往
+  # DocFactory.exe 的清单注入 <ws2:longPathAware>true</ws2:longPathAware>，
+  # 并在文档中说明系统侧还需 HKLM\SYSTEM\CurrentControlSet\Control\FileSystem\LongPathsEnabled=1。
+  # M5 随代码签名一并接入（签名必须在清单注入之后做，否则签名会失效）。
+
+nsis:
+  oneClick: true
+  perMachine: false
+  allowElevation: false
+  allowToChangeInstallationDirectory: false
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: DocFactory
+  runAfterFinish: true
+  # 用户数据（%LOCALAPPDATA%\DocFactory）默认保留，卸载不静默删数据
+  deleteAppDataOnUninstall: false
+  differentialPackage: false
+  # TODO(M5)：卸载器询问「是否保留解析数据」（02 章 §3 卸载策略）。
+  # 做法：新增 build/installer.nsh，实现 customUnInstall 宏 —— MessageBox 询问，
+  # 选「否」才 RMDir /r "$LOCALAPPDATA\DocFactory"，默认保留并提示目录位置。
+  # 脚本落地后在此启用：
+  # include: build/installer.nsh
+
+compression: maximum
+# 只保留中英文语言包，砍掉 Electron 自带的其余 locale（体积清单见 08 章 §2）
+electronLanguages:
+  - zh-CN
+  - en-US
+
+# 纯 JS 依赖，无需为 Electron ABI 重编译原生模块
+npmRebuild: false
+buildDependenciesFromSource: false
+
+# 离线产品：不配置 publish provider，避免生成 app-update.yml / latest.yml，
+# 也就不存在 electron-updater 的自动下载通道。更新走「用户主动检查」：
+# 设置 → 关于 → 检查更新（主进程 update-checker.ts 查询 GitHub Releases，
+# 发现新版只打开浏览器下载页）；Release 由 CI 的 release job 在推送 v* 标签时发布。
+publish: null

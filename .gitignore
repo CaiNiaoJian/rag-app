@@ -7,9 +7,34 @@
 node_modules/
 dist/
 build/
+out/
 __pycache__/
 *.pyc
 .venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
 
 # 本地数据
 *.log
+corpus/report.md
+corpus/samples/
+
+# 本机开发用数据根目录（DOCFACTORY_DATA_DIR 指向此处）
+.devdata/
+
+# CI 生成的发布产物（随包分发，不入库）
+engine/THIRD-PARTY-NOTICES.txt
+
+# UI 截图工具的产物（视觉回归用，本地生成不入库）
+app/.ui-shots/
+app/.ui-shots-dark/
+
+# agent-swarm 运行时状态（本地工具产物，不入库）
+.swarm/
+
+# KC-Chat 运行时产物（插件自动生成，请勿入库）
+.cursor/mcp.json
+.cursor/kc-mcp/
+.cursor/kc-mcp-messages/
+.cursor/kc-chat-exports/

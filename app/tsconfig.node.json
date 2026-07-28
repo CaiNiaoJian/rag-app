@@ -1,0 +1,32 @@
+{
+  /* 主进程 + preload（Node/Electron 环境）。
+   * - 刻意不写 "lib"：target=ES2022 时 TS 默认取 lib.es2022.full（含 DOM），
+   *   electron.d.ts 与 webUtils.getPathForFile(file: File) 都依赖 DOM 类型。
+   * - 刻意把 src/renderer/src/env.d.ts 纳入本 program：window.df 的形状（DfApi/
+   *   DfEngineInfo/DfPathEntry）是冻结契约，preload 用 `const api: DfApi` 让
+   *   编译器逐字段校验，主进程侧的引擎状态也复用同一份定义，杜绝两边漂移。 */
+  "include": [
+    "electron.vite.config.ts",
+    "src/main/**/*.ts",
+    "src/preload/**/*.ts",
+    "src/renderer/src/env.d.ts"
+  ],
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "types": ["node"],
+    "noEmit": true,
+    "strict": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "useDefineForClassFields": true,
+    "sourceMap": true
+  }
+}

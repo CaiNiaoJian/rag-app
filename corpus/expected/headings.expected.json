@@ -1,0 +1,22 @@
+{
+  "sample": "headings.docx",
+  "note": "多级标题（1/2/3 级）+ 无序列表：验证 section 层级还原、list 节点与正文不丢",
+  "must_not_fail": true,
+  "max_seconds": 10,
+  "expect": {
+    "node_counts": {
+      "section": 4,
+      "paragraph": 4
+    },
+    "headings": [
+      "第1章 总则",
+      "1.1 定义",
+      "1.1.1 交付物范围",
+      "第2章 交付条款"
+    ],
+    "text_contains": [
+      "交付期限为合同签订后 90 天",
+      "源代码及构建脚本"
+    ]
+  }
+}

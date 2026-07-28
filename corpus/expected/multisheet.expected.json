@@ -1,0 +1,17 @@
+{
+  "sample": "multisheet.xlsx",
+  "note": "多 sheet + 合并单元格 + 公式（无缓存值应回退原文并记 warning）+ 空 sheet 跳过",
+  "must_not_fail": true,
+  "max_seconds": 15,
+  "expect": {
+    "node_counts": {
+      "sheet": 2,
+      "sheet_region": 2
+    },
+    "text_contains": [
+      "部门预算表",
+      "研发",
+      "明细"
+    ]
+  }
+}

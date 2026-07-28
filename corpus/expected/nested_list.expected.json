@@ -1,0 +1,22 @@
+{
+  "sample": "nested_list.docx",
+  "note": "三级嵌套列表（04 章 §2 list/list_item）。扁平化是常见的偷懒做法，但压平后「第 3 条下面的两个子项」会跟第 4 条粘在一起，切片时语义直接错位。当前 list=6 记录的是逐项各记一个 list 节点的现状；M2 补 parent-child 深度断言后再收紧。",
+  "must_not_fail": true,
+  "max_seconds": 10,
+  "expect": {
+    "node_counts": {
+      "section": 1,
+      "list": 6
+    },
+    "headings": [
+      "实施步骤"
+    ],
+    "text_contains": [
+      "环境准备",
+      "确认磁盘剩余空间不少于 10GB",
+      "确认 CPU 支持 AVX2 指令集",
+      "验收测试",
+      "以上步骤须按顺序执行"
+    ]
+  }
+}
