@@ -73,11 +73,9 @@ nsis:
   # 用户数据（%LOCALAPPDATA%\DocFactory）默认保留，卸载不静默删数据
   deleteAppDataOnUninstall: false
   differentialPackage: false
-  # TODO(M5)：卸载器询问「是否保留解析数据」（02 章 §3 卸载策略）。
-  # 做法：新增 build/installer.nsh，实现 customUnInstall 宏 —— MessageBox 询问，
-  # 选「否」才 RMDir /r "$LOCALAPPDATA\DocFactory"，默认保留并提示目录位置。
-  # 脚本落地后在此启用：
-  # include: build/installer.nsh
+  # 卸载策略（02 章 §3）：customUnInstall 宏 —— 卸载时询问是否删除解析数据，
+  # 默认保留并提示目录位置；升级触发的旧版卸载（isUpdated）不问不删。
+  include: build/installer.nsh
 
 compression: maximum
 # 只保留中英文语言包，砍掉 Electron 自带的其余 locale（体积清单见 08 章 §2）
