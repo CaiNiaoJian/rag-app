@@ -1,34 +1,57 @@
+<div align="center">
+
 # DocFactory
 
-离线的 Windows 桌面工具，把 Word、PDF、PPT、Excel 批量解析成干净的 Markdown 和结构化数据，拿去建 RAG 知识库、做微调语料，或者单纯把老文档整理成能用的东西。
+Windows 离线文档解析与数据集生产工具
 
-**下载**：[Releases 页面](https://github.com/ohaoz/rag-app/releases/latest)，装 `DocFactory-x.y.z-win-x64-setup.exe`。双击就装好了，不需要管理员权限，也不用预装 Python 或 Office。
+[下载安装包](https://github.com/ohaoz/rag-app/releases/latest) · [全部版本](https://github.com/ohaoz/rag-app/releases) · [开发文档](docs/README.md)
 
-第一次运行 Windows 可能弹「未知发布者」的警告——安装包还没做代码签名，点「更多信息」→「仍要运行」就行。
+</div>
 
-## 能干什么
+导入 doc / docx / pdf / ppt / pptx / xls / xlsx，解析为保留结构的 Markdown，按语义切片，导出为 MD / PDF / JSON / CSV 或 Alpaca / ShareGPT 微调数据集。用于 RAG 知识库建设与本地模型语料生产。运行全程离线，数据不出本机。
 
-支持 doc / docx / pdf / ppt / pptx / xls / xlsx。文件或整个文件夹拖进去，排队自动解析，出来的结果保留标题层级、表格结构和页码出处，不是一坨乱掉的纯文本。解析完按语义结构切片（表格不会被拦腰切断，粒度可调），再导出成 Markdown、PDF、JSON、CSV，或者直接生成 Alpaca / ShareGPT 格式的微调数据集。
+## 功能
 
-跟一般解析工具不太一样的地方：
+- 七种格式导入，拖拽文件或文件夹，批量队列处理，支持取消与重试
+- 解析保留标题层级、表格结构（含合并单元格）、图片与页码出处
+- 结构感知切片：表格不截断、标题跟随正文，切片长度与重叠可调，支持重切
+- 导出 Markdown（含图片资产）、PDF、切片 JSON、CSV、Alpaca、ShareGPT 六种格式
+- 每份文档输出文本覆盖率、表格置信度等质量指标，解析质量可量化验证
+- 解析降级逐页记录，错误提示给出原因与建议操作，技术详情可展开
+- 运行时代码层面禁止一切网络连接，仅本机回环通信
 
-- 每份文档解析完都有量化指标（文本覆盖率、表格置信度这些），好不好心里有数，不用靠肉眼猜。
-- 解析失败不是黑盒。降级链逐页记录用到了哪一级，报错是人话加建议操作，技术堆栈折叠在详情里备查。
+## 安装
 
-全程不联网。运行时代码层面禁止一切外联，数据就在你本机（`%LOCALAPPDATA%\DocFactory`，卸载时默认保留）。「设置 → 关于 → 检查更新」也只在你手动点击时才访问 GitHub，不会后台偷偷联网。
+1. 从 [Releases](https://github.com/ohaoz/rag-app/releases/latest) 下载 `DocFactory-x.y.z-win-x64-setup.exe`
+2. 双击安装，免管理员权限，无需预装 Python、Office 或任何运行库
+3. 安装完成自动启动，桌面与开始菜单生成快捷方式
 
-## 现在做到哪了
+安装包暂未做代码签名，SmartScreen 提示「未知发布者」时，点「更多信息 → 仍要运行」。
 
-目前是早期预览版（v0.1.x），说实话离完整还有距离。
+更新：应用内「设置 → 关于 → 检查更新」，仅在手动触发时访问 GitHub。
 
-能用的：docx / pptx / xlsx / 文本型 PDF / xls 的解析；导入 → 解析 → 切片 → 导出全流程；批量任务队列（进度、取消、重试）；六种导出格式；仪表盘和日志查看器。
+## 版本状态
 
-还没好的：扫描件和图片文字的 OCR、复杂多栏 PDF 的版面还原、老格式 doc / ppt 的解析（这两种现在会直接报错）、离线模组热更新。都在路线图上，别急。
+当前为早期预览版（v0.1.x）。
+
+| | |
+|---|---|
+| 已可用 | docx / pptx / xlsx / 文本型 PDF / xls 解析；导入 → 解析 → 切片 → 导出完整流程；批量任务队列；六种导出格式；仪表盘与日志查看器 |
+| 开发中 | 扫描件与图片 OCR；复杂多栏 PDF 版面还原；doc / ppt 解析；.kmod 离线模组更新 |
 
 ## 系统要求
 
-Windows 10（1809 及以上）或 Windows 11，仅 x64，不支持 ARM。CPU 需要支持 AVX2（2013 年以后的基本都支持，太老的机器安装时会提示）。内存最低 8G、推荐 16G，磁盘留 10G 以上。
+| 项 | 要求 |
+|---|---|
+| 系统 | Windows 10 x64（1809+）/ Windows 11 x64，不支持 ARM64 |
+| CPU | 需支持 AVX2，安装时自动检测 |
+| 内存 | 最低 8GB，推荐 16GB |
+| 磁盘 | 预留 10GB 以上 |
+
+## 数据与隐私
+
+数据目录为 `%LOCALAPPDATA%\DocFactory`，卸载时默认保留。应用不含遥测，不后台联网。
 
 ## 开发
 
-架构设计、需求规格等完整文档在 [docs/](docs/README.md)（Electron + Python sidecar，契约优先）。本地构建和 CI 门禁见 [.github/workflows/ci.yml](.github/workflows/ci.yml)。
+架构设计与需求规格见 [docs/](docs/README.md)。技术栈：Electron + Python sidecar（PyInstaller），契约优先开发。构建与 CI 门禁见 [ci.yml](.github/workflows/ci.yml)。
