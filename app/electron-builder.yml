@@ -1,7 +1,9 @@
 # electron-builder 打包配置（08 章 §2 打包与部署）。
 #
 # 核心取舍：
-# - NSIS oneClick + perMachine:false → 装到 %LOCALAPPDATA%\Programs，UAC 不弹窗、免管理员。
+# - NSIS 向导式（oneClick:false）+ 可选安装目录 + perMachine:false → 默认装到
+#   %LOCALAPPDATA%\Programs（该路径免管理员、不弹 UAC）；用户可改装到 D 盘等
+#   自定义目录，仅当目标目录需要提权时才会弹一次 UAC（allowElevation）。
 #   VC++ CRT DLL 随 PyInstaller onedir 一起带，不跑需要管理员权限的 vc_redist。
 # - publish 置空：离线产品不允许存在任何自动更新/发布上传通道（02 章 §7）。
 # - 引擎以 extraResources 打进 resources\engine\，主进程按
@@ -58,10 +60,12 @@ win:
   # M5 随代码签名一并接入（签名必须在清单注入之后做，否则签名会失效）。
 
 nsis:
-  oneClick: true
+  # 向导式安装：用户可自选安装目录（默认 %LOCALAPPDATA%\Programs\DocFactory）。
+  # 默认路径不需要提权；只有用户选择受保护目录（如 Program Files）时才提升。
+  oneClick: false
   perMachine: false
-  allowElevation: false
-  allowToChangeInstallationDirectory: false
+  allowElevation: true
+  allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
   createStartMenuShortcut: true
   shortcutName: DocFactory

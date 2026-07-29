@@ -1,6 +1,6 @@
 {
   "name": "docfactory",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "DocFactory —— Windows 离线 RAG 文档数据工厂",
   "main": "out/main/index.js",
   "author": "DocFactory Team",
