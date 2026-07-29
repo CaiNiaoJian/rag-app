@@ -23,7 +23,7 @@ Windows 离线文档解析与数据集生产工具
 ## 安装
 
 1. 从 [Releases](https://github.com/ohaoz/rag-app/releases/latest) 下载 `DocFactory-x.y.z-win-x64-setup.exe`
-2. 双击安装，免管理员权限，无需预装 Python、Office 或任何运行库
+2. 双击运行，可自选安装目录（默认装到用户目录，该路径免管理员权限）；无需预装 Python、Office 或任何运行库
 3. 安装完成自动启动，桌面与开始菜单生成快捷方式
 
 安装包暂未做代码签名，SmartScreen 提示「未知发布者」时，点「更多信息 → 仍要运行」。
