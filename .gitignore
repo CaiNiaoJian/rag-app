@@ -7,6 +7,8 @@
 node_modules/
 dist/
 build/
+# app/build 是 electron-builder 的 buildResources（installer.nsh 等），必须入库
+!app/build/
 out/
 __pycache__/
 *.pyc
