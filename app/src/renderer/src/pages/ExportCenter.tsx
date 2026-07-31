@@ -45,15 +45,18 @@ interface TaskDetail extends TaskRow {
   result?: Record<string, unknown> | null;
 }
 
-function unwrapItems<T>(resp: unknown): T[] {
-  if (Array.isArray(resp)) return resp as T[];
+function unwrapItems<T>(resp: unknown): { items: T[]; total: number } {
+  if (Array.isArray(resp)) return { items: resp as T[], total: resp.length };
   if (resp && typeof resp === "object") {
     const r = resp as Record<string, unknown>;
     for (const key of ["items", "documents", "results"]) {
-      if (Array.isArray(r[key])) return r[key] as T[];
+      const v = r[key];
+      if (Array.isArray(v)) {
+        return { items: v as T[], total: typeof r.total === "number" ? r.total : v.length };
+      }
     }
   }
-  return [];
+  return { items: [], total: 0 };
 }
 
 function strList(v: unknown): string[] {
@@ -61,9 +64,10 @@ function strList(v: unknown): string[] {
 }
 
 export function ExportCenter() {
-  const { client, nav, navigate, toast } = useApp();
+  const { client, nav, navigate, toast, page } = useApp();
 
   const [docs, setDocs] = useState<DocumentRow[]>([]);
+  const [docsLoading, setDocsLoading] = useState(false);
   const [picked, setPicked] = useState<Set<string>>(() => new Set());
   const [onlyOk, setOnlyOk] = useState(true);
   const [q, setQ] = useState("");
@@ -79,19 +83,44 @@ export function ExportCenter() {
   const [failInfo, setFailInfo] = useState<{ code: string | null; detail: string; taskId: string } | null>(null);
   const pollRef = useRef<number | null>(null);
 
-  // ---------------- 初始数据 ----------------
+  // ---------------- 文档列表 ----------------
 
+  /* 左栏要一次呈现全库（勾选范围不该受分页切割），列表端点单页上限 200：
+   * 循环取完但封顶 10 页（2000 篇）——再多左栏也翻不动，先保 UI 不卡
+   * （同文档库 loadAllChunks 的取舍）。 */
   const loadDocs = useCallback(async () => {
+    setDocsLoading(true);
     try {
-      const resp = await client.getJson<unknown>("/documents?page=1");
-      setDocs(unwrapItems<DocumentRow>(resp));
+      const out: DocumentRow[] = [];
+      for (let p = 1; p <= 10; p += 1) {
+        const resp = await client.getJson<unknown>(`/documents?page=${p}&page_size=200`);
+        const { items, total } = unwrapItems<DocumentRow>(resp);
+        out.push(...items);
+        if (items.length < 200 || out.length >= total) break;
+      }
+      setDocs(out);
+      /* 顺手清掉勾选集合里已不存在的文档（在文档库删除后切回来的场景）：
+       * 留着会把已删除的 id 塞进导出任务 */
+      const alive = new Set(out.map((d) => d.id));
+      setPicked((prev) => {
+        const next = new Set(Array.from(prev).filter((id) => alive.has(id)));
+        return next.size === prev.size ? prev : next;
+      });
     } catch {
       setDocs([]);
+    } finally {
+      setDocsLoading(false);
     }
   }, [client]);
 
+  /* 六页常驻挂载（App.tsx）：本页只挂载一次，切页只切显隐。若只在挂载时取一次列表，
+   * 之后在工作台导入的文件会永远不出现（issue #4）——所以每次切回本页都重新拉取。
+   * 首次访问时 page 也已是 "export"，初始加载同样由这里完成。 */
   useEffect(() => {
-    void loadDocs();
+    if (page === "export") void loadDocs();
+  }, [page, loadDocs]);
+
+  useEffect(() => {
     void client
       .getJson<EngineSettings>("/settings")
       .then((s) => {
@@ -99,16 +128,15 @@ export function ExportCenter() {
         setOutDir(s.output_dir ?? "");
       })
       .catch(() => undefined);
-  }, [client, loadDocs]);
+  }, [client]);
 
-  /* 文档库「导出」按钮跳过来时带 doc_id：直接勾上并刷新一次列表 */
+  /* 文档库「导出」按钮跳过来时带 doc_id：直接勾上（列表刷新由上面的切页 effect 负责） */
   useEffect(() => {
     if (nav.page !== "export") return;
     const docId = nav.params["doc_id"];
     if (!docId) return;
     setPicked(new Set([docId]));
-    void loadDocs();
-  }, [nav, loadDocs]);
+  }, [nav]);
 
   const visible = useMemo(() => {
     const kw = q.trim().toLowerCase();
@@ -362,12 +390,25 @@ export function ExportCenter() {
             >
               {picked.size === visible.length && visible.length > 0 ? "取消全选" : "全选"}
             </button>
+            <button
+              className="btn btn-sm"
+              disabled={docsLoading}
+              title="重新读取文档列表"
+              onClick={() => void loadDocs()}
+            >
+              刷新
+            </button>
           </div>
           <div className="col-scroll">
             {visible.length === 0 ? (
-              <EmptyState title="没有可导出的文档" hint="先在工作台导入并解析文件">
-                <button className="btn btn-primary" onClick={() => navigate("workbench")}>去工作台</button>
-              </EmptyState>
+              /* 载入期不给「没有文档」的定论：列表还没到就下结论，用户会当成导入丢了 */
+              docsLoading ? (
+                <div className="col-empty">正在读取文档库…</div>
+              ) : (
+                <EmptyState title="没有可导出的文档" hint="先在工作台导入并解析文件">
+                  <button className="btn btn-primary" onClick={() => navigate("workbench")}>去工作台</button>
+                </EmptyState>
+              )
             ) : (
               <ul className="pick-list">
                 {visible.map((d) => (
