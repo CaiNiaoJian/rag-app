@@ -58,6 +58,10 @@ declare global {
     appInfo: {
       versions(): Promise<{ app: string; electron: string; chrome: string; node: string }>;
     };
+    appControl: {
+      /** 拉起系统卸载程序并退出应用；开发模式/解压版返回 ok:false 与原因说明 */
+      uninstall(): Promise<{ ok: boolean; reason: string | null }>;
+    };
     update: {
       /** 用户主动检查更新（唯一的出网动作，见主进程 update-checker.ts） */
       check(): Promise<DfUpdateInfo>;

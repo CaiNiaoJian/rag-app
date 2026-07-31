@@ -91,6 +91,7 @@ export function Settings() {
   const [modules, setModules] = useState<ModuleInfo[]>([]);
   const [toRollback, setToRollback] = useState<ModuleInfo | null>(null);
   const [toUninstall, setToUninstall] = useState<ModuleInfo | null>(null);
+  const [askUninstallApp, setAskUninstallApp] = useState(false);
 
   const [health, setHealth] = useState<HealthInfoEx | null>(null);
   const [versions, setVersions] = useState<{ app: string; electron: string; chrome: string; node: string } | null>(null);
@@ -645,6 +646,19 @@ export function Settings() {
                 完整许可证文本随安装包一同分发。
               </p>
             </div>
+            <div className="about-block">
+              <div className="field-row">
+                <div className="field-main">
+                  <div className="field-title">卸载 DocFactory</div>
+                  <div className="field-desc">
+                    关闭应用并启动系统卸载程序。卸载过程会询问是否一并删除已解析的文档数据（默认保留，重装后可继续使用）。
+                  </div>
+                </div>
+                <button className="btn btn-sm btn-danger-ghost" onClick={() => setAskUninstallApp(true)}>
+                  卸载…
+                </button>
+              </div>
+            </div>
             </div>
           </section>
         )}
@@ -672,6 +686,20 @@ export function Settings() {
           if (toUninstall) void doUninstall(toUninstall);
         }}
         onClose={() => setToUninstall(null)}
+      />
+
+      <ConfirmModal
+        open={askUninstallApp}
+        title="卸载 DocFactory"
+        danger
+        confirmText="卸载"
+        message="将关闭 DocFactory 并启动卸载程序。卸载过程中会询问是否删除已解析的文档数据（默认保留）。确定继续吗？"
+        onConfirm={() => {
+          void window.df.appControl.uninstall().then((r) => {
+            if (!r.ok) toast(r.reason ?? "无法启动卸载程序", "err");
+          });
+        }}
+        onClose={() => setAskUninstallApp(false)}
       />
     </div>
   );

@@ -28,6 +28,7 @@ const CH = {
   pdfPrintHtmlToPdf: "df:pdf:print-html-to-pdf",
   diagnosticsExportZip: "df:diagnostics:export-zip",
   appVersions: "df:app:versions",
+  appUninstall: "df:app:uninstall",
   updateCheck: "df:update:check",
   updateOpenDownload: "df:update:open-download",
 } as const;
@@ -111,6 +112,11 @@ const api: DfApi = {
         chrome: string;
         node: string;
       }>,
+  },
+
+  appControl: {
+    uninstall: () =>
+      ipcRenderer.invoke(CH.appUninstall) as Promise<{ ok: boolean; reason: string | null }>,
   },
 
   update: {

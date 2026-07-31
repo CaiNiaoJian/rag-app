@@ -15,6 +15,7 @@
  * 改名时务必同时改两处）。
  */
 
+import { spawn } from "node:child_process";
 import { readFile, readdir, mkdir, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, join, resolve, sep } from "node:path";
 
@@ -42,6 +43,7 @@ export const CHANNELS = {
   pdfPrintHtmlToPdf: "df:pdf:print-html-to-pdf",
   diagnosticsExportZip: "df:diagnostics:export-zip",
   appVersions: "df:app:versions",
+  appUninstall: "df:app:uninstall",
   updateCheck: "df:update:check",
   updateOpenDownload: "df:update:open-download",
 } as const;
@@ -489,6 +491,31 @@ export function registerIpcHandlers(deps: IpcDeps): void {
       node: process.versions.node,
     }),
   );
+
+  // ---- 应用卸载 ----
+  /* 应用内卸载入口（issue #4）：拉起 NSIS 卸载器后退出应用，剩下的交给卸载向导
+   * （是否删除解析数据由 installer.nsh 的 customUnInstall 询问，默认保留）。
+   * 卸载器路径 = 安装根目录下的 "Uninstall DocFactory.exe"（electron-builder NSIS 约定）。
+   * 开发模式 / 绿色解压运行没有卸载器：如实告知并指路系统卸载，不做危险的兜底删除。
+   * 通道零参数，渲染层没有任何可注入的输入面。 */
+  ipcMain.handle(CHANNELS.appUninstall, async (): Promise<{ ok: boolean; reason: string | null }> => {
+    const uninstaller = join(dirname(app.getPath("exe")), "Uninstall DocFactory.exe");
+    try {
+      await stat(uninstaller);
+    } catch {
+      log.warn(`[uninstall] 未找到卸载器：${uninstaller}`);
+      return {
+        ok: false,
+        reason: "当前运行环境没有卸载程序（开发模式或解压版）。安装版请从 Windows「设置 → 应用」中卸载。",
+      };
+    }
+    log.info(`[uninstall] 拉起卸载器并退出应用：${uninstaller}`);
+    const child = spawn(uninstaller, [], { detached: true, stdio: "ignore" });
+    child.unref();
+    /* 略等一拍让卸载器进程站稳再退出：主程序先退，卸载器就不会因「应用正在运行」卡住 */
+    setTimeout(() => app.quit(), 300);
+    return { ok: true, reason: null };
+  });
 
   // ---- update ----
   // 检查与打开下载页都是用户主动动作；出网边界与 URL 白名单见 update-checker.ts

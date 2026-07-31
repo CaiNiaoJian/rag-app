@@ -104,6 +104,9 @@ function install(target) {
     appInfo: {
       versions: async () => ({ app: "0.1.0", electron: "42.7.1", chrome: "148", node: "24" }),
     },
+    appControl: {
+      uninstall: async () => ({ ok: false, reason: "截图环境不可卸载" }),
+    },
   };
 }
 
