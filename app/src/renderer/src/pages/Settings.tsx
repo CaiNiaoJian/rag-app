@@ -90,6 +90,7 @@ export function Settings() {
 
   const [modules, setModules] = useState<ModuleInfo[]>([]);
   const [toRollback, setToRollback] = useState<ModuleInfo | null>(null);
+  const [toUninstall, setToUninstall] = useState<ModuleInfo | null>(null);
 
   const [health, setHealth] = useState<HealthInfoEx | null>(null);
   const [versions, setVersions] = useState<{ app: string; electron: string; chrome: string; node: string } | null>(null);
@@ -184,6 +185,16 @@ export function Settings() {
       void loadModules();
     } catch {
       toast("回滚失败，可能上一版本目录已损坏", "err");
+    }
+  };
+
+  const doUninstall = async (m: ModuleInfo) => {
+    try {
+      await client.del(`/modules/${encodeURIComponent(m.id)}`);
+      toast(`已卸载「${m.name ?? m.id}」，重启引擎后彻底生效`, "ok");
+      void loadModules();
+    } catch {
+      toast("卸载失败，请稍后重试", "err");
     }
   };
 
@@ -464,7 +475,7 @@ export function Settings() {
             <div className="pane-head">
               <div>
                 <div className="field-title">已安装模组</div>
-                <div className="field-desc">模组用于扩展解析、OCR 与格式转换能力；安装或回滚后需重启引擎生效。</div>
+                <div className="field-desc">模组用于扩展解析、OCR 与格式转换能力；安装、回滚或卸载后需重启引擎生效。</div>
               </div>
               <div className="pane-head-actions">
                 <button className="btn btn-sm" onClick={() => void loadModules()}>刷新</button>
@@ -511,6 +522,13 @@ export function Settings() {
                             onClick={() => setToRollback(m)}
                           >
                             回滚
+                          </button>
+                          <button
+                            className="btn btn-sm btn-danger-ghost"
+                            title="删除该模组的全部版本文件"
+                            onClick={() => setToUninstall(m)}
+                          >
+                            卸载
                           </button>
                         </td>
                       </tr>
@@ -642,6 +660,18 @@ export function Settings() {
           if (toRollback) void doRollback(toRollback);
         }}
         onClose={() => setToRollback(null)}
+      />
+
+      <ConfirmModal
+        open={toUninstall !== null}
+        title="卸载模组"
+        danger
+        confirmText="卸载"
+        message={`将卸载「${toUninstall?.name ?? toUninstall?.id ?? ""}」并删除其全部版本文件，此操作不可撤销；重启引擎后彻底生效。想再次使用需重新导入 .kmod 安装包。`}
+        onConfirm={() => {
+          if (toUninstall) void doUninstall(toUninstall);
+        }}
+        onClose={() => setToUninstall(null)}
       />
     </div>
   );

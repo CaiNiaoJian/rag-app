@@ -424,3 +424,7 @@ class Database:
                 "UPDATE modules SET version=?, prev_version=?, installed_at=? WHERE id=?",
                 (version, prev_version, now_iso(), module_id),
             )
+
+    def delete_module(self, module_id: str) -> None:
+        with self._write_lock, self.connect() as conn:
+            conn.execute("DELETE FROM modules WHERE id=?", (module_id,))

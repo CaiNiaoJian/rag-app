@@ -211,6 +211,50 @@ def rollback(db: Database, paths: Paths, module_id: str) -> dict[str, Any]:
     }
 
 
+# ---------------------------------------------------------------- 卸载
+
+
+def uninstall(db: Database, paths: Paths, module_id: str) -> dict[str, Any]:
+    """卸载模组：删除 modules/{id}/ 下全部版本目录 + 注销表行。
+
+    先删目录再删表行（同文档删除的顺序哲学）；目录若有残留（Windows 文件占用）
+    **仍然注销表行**——注销后引擎重启不会再加载它，残留目录由下次启动的
+    startup_check 孤儿清扫兜底，用户无需手动收拾。
+    """
+    row = db.get_module(module_id)
+    if row is None:
+        raise DocFactoryError("E03", f"模组不存在：{module_id}")
+
+    mroot = paths.modules / module_id
+    _rmtree_quiet(mroot)
+    dir_removed = not mroot.exists()
+
+    db.delete_module(module_id)
+    db.log_event(
+        level="info" if dir_removed else "warning",
+        message=(
+            f"模组 {module_id}（{row.get('name') or '未命名'} v{row.get('version') or '?'}）已卸载"
+            + ("" if dir_removed else "；目录暂被占用，将在下次启动时自动清理")
+            + "，重启引擎后彻底生效"
+        ),
+        detail={
+            "module_id": module_id,
+            "name": row.get("name"),
+            "version": row.get("version"),
+            "action": "uninstalled",
+            "dir_removed": dir_removed,
+        },
+    )
+    return {
+        "module_id": module_id,
+        "name": row.get("name"),
+        "version": row.get("version"),
+        "dir_removed": dir_removed,
+        "restart_required": True,
+        "message": "卸载完成，重启引擎后彻底生效",
+    }
+
+
 # ---------------------------------------------------------------- 启动自检（安装第⑦步）
 
 
@@ -230,9 +274,21 @@ def module_dir_ok(paths: Paths, module_id: str, version: str) -> bool:
 def startup_check(db: Database, paths: Paths) -> list[dict[str, Any]]:
     """引擎启动自检：启用中的模组目录/清单校验，失败自动回滚指针并记 warning。
 
+    顺带清扫孤儿目录：modules/ 下没有对应表行的目录（多为卸载时被占用的残留），
+    此刻引擎刚启动、必然无人持有句柄，是唯一能保证删得掉的时机。
+
     返回处置清单（供启动日志汇总与 UI 提示）：
         {"module_id", "action": "rolled_back"|"unavailable", ...}
     """
+    registered = {row["id"] for row in db.list_modules()}
+    try:
+        if paths.modules.is_dir():
+            for child in paths.modules.iterdir():
+                if child.is_dir() and child.name not in registered:
+                    _rmtree_quiet(child)
+    except OSError:
+        pass  # 清扫失败不阻断启动，下次再试
+
     issues: list[dict[str, Any]] = []
     for row in db.list_modules():
         if not row.get("enabled"):

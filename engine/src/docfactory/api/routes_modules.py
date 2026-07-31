@@ -1,8 +1,9 @@
 """模组管理端点（02 章 §2.1，06 章）。
 
-- GET  /modules           模组列表（含当前版本指针与可回滚性）
-- POST /modules/install   建 module_install 后台任务（验签/解包耗时，不能占 HTTP 线程）
-- POST /modules/rollback  同步回滚（只改指针，瞬时完成）
+- GET    /modules              模组列表（含当前版本指针与可回滚性）
+- POST   /modules/install      建 module_install 后台任务（验签/解包耗时，不能占 HTTP 线程）
+- POST   /modules/rollback     同步回滚（只改指针，瞬时完成）
+- DELETE /modules/{module_id}  同步卸载（删目录 + 注销表行，重启后彻底生效）
 
 依赖统一从 request.app.state 取（db/paths/scheduler），Bearer 鉴权由应用层统一处理。
 """
@@ -18,7 +19,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from docfactory.errors import DocFactoryError, error_payload
-from docfactory.modules.manager import module_dir_ok, rollback
+from docfactory.modules.manager import module_dir_ok, rollback, uninstall
 
 router = APIRouter()
 
@@ -81,5 +82,20 @@ def rollback_module(request: Request, body: RollbackBody) -> Any:
     paths = request.app.state.paths
     try:
         return rollback(db, paths, body.module_id)
+    except DocFactoryError as exc:
+        return JSONResponse(status_code=400, content=error_payload(exc.code, exc.detail))
+
+
+@router.delete("/modules/{module_id}")
+def uninstall_module(request: Request, module_id: str) -> Any:
+    """同步卸载：删除该模组全部版本目录并注销表行；重启引擎后彻底生效。
+
+    目录被占用时表行照样注销（下次启动不再加载），残留目录由启动自检的
+    孤儿清扫兜底——对用户而言卸载一次就是卸载成功，无需关心句柄细节。
+    """
+    db = request.app.state.db
+    paths = request.app.state.paths
+    try:
+        return uninstall(db, paths, module_id)
     except DocFactoryError as exc:
         return JSONResponse(status_code=400, content=error_payload(exc.code, exc.detail))

@@ -38,6 +38,7 @@ from docfactory.modules.manager import (
     module_dir_ok,
     rollback,
     startup_check,
+    uninstall,
 )
 
 
@@ -321,3 +322,45 @@ def test_startup_check_marks_unavailable_when_no_fallback(signer, tmp_path: Path
 def test_startup_check_is_quiet_when_healthy(signer, tmp_path: Path, db: Database, paths: Paths):
     install_kmod(db, paths, build_kmod(tmp_path / "a.kmod", signer))
     assert startup_check(db, paths) == []
+
+
+# ---------------------------------------------------------------- 卸载
+
+
+def test_uninstall_removes_all_versions_and_row(signer, tmp_path: Path, db: Database, paths: Paths):
+    """卸载删掉 modules/{id}/ 整棵树（含历史版本目录）并注销表行。"""
+    install_kmod(db, paths, build_kmod(tmp_path / "a.kmod", signer, manifest_over={"version": "2.1"}))
+    install_kmod(db, paths, build_kmod(tmp_path / "b.kmod", signer, manifest_over={"version": "2.3"}))
+
+    result = uninstall(db, paths, "ocr-hp")
+    assert result["restart_required"] is True and result["dir_removed"] is True
+    assert db.get_module("ocr-hp") is None
+    assert not (paths.modules / "ocr-hp").exists()
+
+
+def test_uninstall_unknown_module(db: Database, paths: Paths):
+    with raises_detail("模组不存在"):
+        uninstall(db, paths, "ghost")
+
+
+def test_uninstalled_module_can_be_reinstalled(signer, tmp_path: Path, db: Database, paths: Paths):
+    """卸载后重装应回到全新状态：无回滚指针（prev_version 不残留）。"""
+    install_kmod(db, paths, build_kmod(tmp_path / "a.kmod", signer, manifest_over={"version": "2.1"}))
+    install_kmod(db, paths, build_kmod(tmp_path / "b.kmod", signer, manifest_over={"version": "2.3"}))
+    uninstall(db, paths, "ocr-hp")
+
+    result = install_kmod(db, paths, build_kmod(tmp_path / "c.kmod", signer, manifest_over={"version": "2.3"}))
+    assert result["prev_version"] is None
+    assert db.get_module("ocr-hp")["version"] == "2.3"
+
+
+def test_startup_check_sweeps_orphan_dirs(signer, tmp_path: Path, db: Database, paths: Paths):
+    """modules/ 下没有表行的目录（卸载时被占用的残留）在启动自检时被清扫。"""
+    orphan = paths.modules / "ghost-mod" / "1.0"
+    orphan.mkdir(parents=True)
+    (orphan / "leftover.bin").write_bytes(b"junk")
+
+    install_kmod(db, paths, build_kmod(tmp_path / "a.kmod", signer))  # 在册模组不受影响
+    assert startup_check(db, paths) == []
+    assert not (paths.modules / "ghost-mod").exists()
+    assert module_dir_ok(paths, "ocr-hp", "2.3")

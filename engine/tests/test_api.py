@@ -327,6 +327,30 @@ def test_dashboard_shape(client, db: Database):
     assert body["cards"]
 
 
+# ---------------------------------------------------------------- 模组
+
+
+def test_uninstall_module_endpoint(client, db: Database, paths: Paths):
+    """DELETE /modules/{id}：目录整树删除 + 表行注销 + 列表随之消失。"""
+    db.upsert_module(id="ocr-hp", name="高精度 OCR", type="ocr",
+                     version="2.3", manifest={"id": "ocr-hp"})
+    mdir = paths.module_dir("ocr-hp", "2.3")
+    mdir.mkdir(parents=True)
+    (mdir / "manifest.json").write_text('{"id": "ocr-hp"}', encoding="utf-8")
+
+    body = client.delete("/modules/ocr-hp").json()
+    assert body["restart_required"] is True and body["dir_removed"] is True
+    assert db.get_module("ocr-hp") is None
+    assert not (paths.modules / "ocr-hp").exists()
+    assert client.get("/modules").json()["modules"] == []
+
+
+def test_uninstall_unknown_module_endpoint(client):
+    res = client.delete("/modules/ghost")
+    assert res.status_code == 400
+    assert "模组不存在" in (res.json().get("detail") or "")
+
+
 # ---------------------------------------------------------------- CORS
 
 
