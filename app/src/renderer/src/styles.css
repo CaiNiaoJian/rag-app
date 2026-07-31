@@ -2216,7 +2216,9 @@ td.col-name > :first-child {
 
 .dash-cards {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(168px, 1fr));
+  /* 统计卡恰好铺满一行：4 张单宽卡 + 1 张 hero 双宽 = 6 轨。
+     auto-fit 在宽窗口会挤出十来条轨道，行尾一串空位看着像 bug 而不是留白 */
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 12px;
 }
 
@@ -2277,7 +2279,10 @@ td.col-name > :first-child {
 .dash-grid {
   flex: 1 0 auto;
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  /* 固定 4 轨：第一行四张分布图、第二行趋势(双宽)+TOP5+耗时，任何窗宽都是两个满行。
+     原先的 auto-fit 列数随窗宽漂移：屏幕够宽时挤出 5-6 轨，
+     第二行只剩两块面板拖着一串空位，整个网格看起来是歪的 */
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 12px;
 }
 .panel {
@@ -2300,6 +2305,22 @@ td.col-name > :first-child {
 }
 .panel-wide {
   grid-column: span 2;
+}
+
+/* 趋势双图并排：一格一张，各自接近 320×120 的设计长宽比；
+   窄到放不下时允许换行退回上下堆叠 */
+.trend-duo {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+}
+.trend-cell {
+  flex: 1 1 240px;
+  min-width: 0;
+}
+.trend-cell .panel-subtitle {
+  margin-top: 0;
+  margin-bottom: 6px;
 }
 /* 面板小标题走正文字族：衬线只留给页面标题与大数字（product register：
    display 字体不进 UI 标签），小字号宋体也确实发虚 */
@@ -2450,6 +2471,18 @@ td.col-name > :first-child {
   display: flex;
   align-items: center;
   gap: 10px;
+}
+
+/* 窄窗口降级：图表两轨（趋势双宽=整行）、统计卡三轨。
+   dense 让 hero 换行后留下的洞由后续单宽卡回填，行内不留空位 */
+@media (max-width: 1279px) {
+  .dash-cards {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-auto-flow: dense;
+  }
+  .dash-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 /* ---------------- 设置 ---------------- */

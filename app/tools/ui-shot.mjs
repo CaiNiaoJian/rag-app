@@ -30,9 +30,10 @@ const onlyPage = flags.find((f) => f.startsWith("--page="))?.split("=")[1] ?? nu
 /* --theme=dark：强制深色主题截图（深色回归也能一条命令跑完） */
 const themeFlag = flags.find((f) => f.startsWith("--theme="))?.split("=")[1] ?? null;
 
-/* 1440x900 是这类桌面工具最常见的窗口尺寸；deviceScaleFactor=2 出的图放大看得清抗锯齿 */
-const WIDTH = 1440;
-const HEIGHT = 900;
+/* 1440x900 是这类桌面工具最常见的窗口尺寸；deviceScaleFactor=2 出的图放大看得清抗锯齿。
+ * --width/--height 可改窗口尺寸：布局问题常常只在特定窗宽暴露（如宽屏下网格空轨道）。 */
+const WIDTH = Number(flags.find((f) => f.startsWith("--width="))?.split("=")[1]) || 1440;
+const HEIGHT = Number(flags.find((f) => f.startsWith("--height="))?.split("=")[1]) || 900;
 
 const PAGES = ["workbench", "library", "export", "dashboard", "logs", "settings"];
 

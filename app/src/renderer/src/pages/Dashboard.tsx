@@ -557,19 +557,27 @@ export function Dashboard() {
         <section className="panel panel-wide">
           <h3 className="panel-title">近期趋势</h3>
           <div className="panel-body">
-            <TrendLine
-              series={[
-                { name: "导入", color: BRAND, points: view.imported },
-                { name: "解析成功", color: OK, points: view.parsedOk },
-              ]}
-              labels={view.days}
-            />
-            {view.coverage.length > 1 && (
-              <>
-                <div className="panel-subtitle">平均文本覆盖率（%）</div>
-                <TrendLine series={[{ name: "覆盖率", color: WARN, points: view.coverage }]} labels={view.days} />
-              </>
-            )}
+            {/* 两张趋势图并排而非上下堆叠：堆叠会把本行撑到邻居面板两倍高，
+                「失败 TOP5」「处理耗时」被拉到同高后大片留白，图也被横向抻扁。
+                本面板占双列，正好一格一张，各自接近 320×120 的设计比例。 */}
+            <div className="trend-duo">
+              <div className="trend-cell">
+                <div className="panel-subtitle">导入与解析成功（个/日）</div>
+                <TrendLine
+                  series={[
+                    { name: "导入", color: BRAND, points: view.imported },
+                    { name: "解析成功", color: OK, points: view.parsedOk },
+                  ]}
+                  labels={view.days}
+                />
+              </div>
+              {view.coverage.length > 1 && (
+                <div className="trend-cell">
+                  <div className="panel-subtitle">平均文本覆盖率（%）</div>
+                  <TrendLine series={[{ name: "覆盖率", color: WARN, points: view.coverage }]} labels={view.days} />
+                </div>
+              )}
+            </div>
           </div>
         </section>
 
