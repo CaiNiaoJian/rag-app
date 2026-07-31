@@ -146,12 +146,35 @@ class Settings(BaseModel):
 def load_settings(paths: Paths) -> Settings:
     try:
         raw = json.loads(paths.settings_path.read_text(encoding="utf-8"))
-        return Settings.model_validate(raw)
     except FileNotFoundError:
         return Settings()
     except Exception:
-        # 设置损坏时回退默认值（不阻断启动），由调用方记日志
+        # 文件损坏（半写入/编码错乱）时回退默认值（不阻断启动），由调用方记日志
         return Settings()
+    try:
+        return Settings.model_validate(raw)
+    except Exception:
+        # 跨版本兼容（覆盖安装后新版本读旧 settings.json）：个别字段非法
+        # ——比如新版收紧/更名了枚举值——不该把整份设置打回默认。
+        # 逐个顶层字段抢救：合法的保留，非法的才用默认值（组内字段一荣俱荣，
+        # 组粒度足够：用户真正的自定义集中在 output_dir 与 chunk 组）。
+        return _salvage_settings(raw)
+
+
+def _salvage_settings(raw: object) -> Settings:
+    settings = Settings()
+    if not isinstance(raw, dict):
+        return settings
+    data = settings.model_dump()
+    for name in Settings.model_fields:
+        if name not in raw:
+            continue
+        try:
+            settings = Settings.model_validate({**data, name: raw[name]})
+            data = settings.model_dump()
+        except Exception:
+            continue  # 该字段（或该组）非法：保持默认，不影响其余字段
+    return settings
 
 
 def save_settings(paths: Paths, settings: Settings) -> None:
