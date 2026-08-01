@@ -9,7 +9,7 @@
 
 | 里程碑 | done | partial | missing | 完成度 | 还差什么（一句话） |
 |---|---|---|---|---|---|
-| M1 骨架跑通 | 30 | 22 | 7 | ~50% | 本轮已补齐主要缺口，剩日志格式契约、取消兜底 |
+| M1 骨架跑通 | 31 | 22 | 6 | ~52% | 收尾清单已清零（日志契约 2026-08-01 对齐）；余为 22 项 partial 打磨（键盘可达/CSP 生效等） |
 | **M2 核心解析** | 6 | 12 | 18 | **~16%** | **Docling / RapidOCR / LibreOffice 三大能力一个都没接** |
 | M3 切片与导出 | 13 | 8 | 4 | ~52% | Qwen tokenizer 未接、PDF 导出三项、切片规则无单测 |
 | M4 模组与模型接口 | 13 | 10 | 3 | ~50% | 模组装完不生效（无 loader）、安装闭环断在半路 |
@@ -42,6 +42,10 @@ M3/M4 数字高于 M2，是因为**实现顺序偏离了里程碑计划**——�
 16. **队列暂停持久化** —— 引擎侧 `meta.queue_paused` 开关 + `GET /queue` / `POST /queue/pause` 端点：暂停 = 暂停派发，排队任务**原地保留**（task_id 稳定、追溯链不断），正在跑的不打断，模组安装豁免；重启引擎/刷新页面都不丢。Workbench 废弃「取消再重建」模拟与 `held[]`，暂停态以引擎为唯一事实来源。
 17. **技术版本清单锁定** —— `docs/08` §6 表按 uv.lock/package-lock 实测更新（FastAPI 0.140.x 等，未接入组件明确标注 M2 锁版）；`pyproject.toml` 运行时依赖全部收紧到小版本区间（上界挡住重 lock 时静默跨版），`uv lock` 复核无版本漂移。
 
+### 2026-08-01 增量（已验证：212 单测 + 21 corpus 全绿，ruff / typecheck / build 通过）
+
+18. **日志两端对齐九字段 JSONL**（M1 收尾唯一剩余项，08 章 §1 契约落地）—— 引擎 `logsetup.py` 弃用 `serialize=True`（只能吐 loguru 私有嵌套结构、无 `src`），改自定义 **callable formatter** 把每条 record 拍平成 `{ts,level,src,task_id,doc_id,code,page,msg,detail}`（callable formatter 下 loguru 不再自动追加异常栈/换行，输出严格一行一 JSON）；Electron `index.ts` 弃用纯文本模板，electron-log `format` 函数输出同构九字段（`src="app"`、level `warn→warning` 归一、`code` 从文案正则抽取、整行 JSON 包成单元素数组绕开模板拼接）。两端 `src` 区分产日志进程，诊断包里 `engine-*.jsonl` 与 `app-main.log` 从此可用同一解析器合并时间线（`routes_logs.py` 的 README 文案同步更新）。新增 `test_logsetup.py`（5 条：字段集合恒为九项且全扁平 / 字段映射与 level 小写归一 / 未绑定业务字段为 null / 异常入 detail / 真跑 setup_logging 后落盘每行都是合法 JSON）锁定契约防回退。
+
 ### 实测数据（基线，非门禁）
 
 | 指标 | 实测 | 01 章目标 | |
@@ -61,7 +65,7 @@ M3/M4 数字高于 M2，是因为**实现顺序偏离了里程碑计划**——�
 
 ### M1 收尾（剩余）
 
-- [ ] **日志 JSONL 行格式与 08 章 §1 契约不符**（S，**M1 唯一剩余项，需决策**）。契约是扁平九字段 `{ts,level,src,task_id,doc_id,code,page,msg,detail}`；引擎实际写的是 loguru 的私有结构（无 `src`，键名层级全不同），Electron 侧更是纯文本而非 JSONL（`app/src/main/index.ts:75`）。诊断包里两类日志无法用同一套解析器合并时间线。**要么两端对齐契约，要么改文档**——现在是两边都不对。
+- [x] ~~**日志 JSONL 行格式与 08 章 §1 契约不符**~~（2026-08-01 完成，见增量 18：两端已对齐扁平九字段 `{ts,level,src,task_id,doc_id,code,page,msg,detail}`，诊断包可用同一解析器合并时间线）
 - [x] ~~取消后 10s 未响应则 kill worker~~（2026-07-29 完成，见增量 15）
 - [x] ~~队列「暂停」只活在渲染进程内存里~~（2026-07-29 完成，见增量 16）
 - [x] ~~单文件 500MB 上限零执行覆盖~~（2026-07-29 完成，见增量 14）

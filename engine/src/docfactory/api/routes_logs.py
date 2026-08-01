@@ -102,7 +102,8 @@ def export_diagnostics(request: Request) -> dict[str, Any]:
 
 _README = (
     "DocFactory 诊断包\n"
-    "  logs/        引擎运行日志（JSONL，按新→旧截取）\n"
+    "  logs/        引擎与应用日志（统一九字段 JSONL：ts/level/src/task_id/doc_id/"
+    "code/page/msg/detail，src 区分 engine/app，按新→旧截取）\n"
     "  system.json  版本、运行环境、设置快照、任务与数据统计\n"
     "  events.json  最近 500 条结构化事件（含错误码与阶段）\n"
     "本包不含任何文档内容，仅含文件名与元数据。\n"

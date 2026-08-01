@@ -20,6 +20,7 @@ import {
 } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { inspect } from "node:util";
 
 import { BrowserWindow, Menu, app, screen, session } from "electron";
 import log from "electron-log/main";
@@ -73,6 +74,49 @@ function pruneArchives(logsDir: string): void {
   }
 }
 
+/* 日志行契约（08 章 §1）：与引擎 logsetup.py 严格同构的扁平九字段 JSONL
+ * ——ts/level/src/task_id/doc_id/code/page/msg/detail。此前引擎写 loguru 私有结构、
+ * 这边写纯文本，两边都不符契约，诊断包里 engine-*.jsonl 与 app-main.log 无法用同一套
+ * 解析器合并成一条时间线。现在两端同构：src 区分产日志的进程（引擎 "engine" / 本进程 "app"）。 */
+const LOG_CODE_RE = /\b(E0[1-7]|DGR-L[12])\b/;
+
+/** electron-log 的告警级叫 "warn"，统一成契约/task_events 的 "warning"（其余级别原样） */
+function normalizeLogLevel(level: string): string {
+  return level === "warn" ? "warning" : level;
+}
+
+/** LogMessage.data 拼成一行文本（对象走 util.inspect、Error 取栈）——等价旧模板的 {text} */
+function composeLogText(data: unknown[]): string {
+  return data
+    .map((d) =>
+      typeof d === "string" ? d : d instanceof Error ? (d.stack ?? d.message) : inspect(d),
+    )
+    .join(" ");
+}
+
+/** 从文本里捞错误码：主进程/引擎的报错文案常带 [E06] 这类码，抽出来放进 code 便于按码检索 */
+function extractLogCode(text: string): string | null {
+  const m = LOG_CODE_RE.exec(text);
+  return m ? m[1] : null;
+}
+
+/** electron-log 文件行 formatter：输出与引擎同构的九字段 JSONL（src 恒 "app"）。
+ * 主进程日志不绑任务，task_id/doc_id/page 恒 null；code 尽力从文案抽取，detail 暂留 null。 */
+function formatAppLogLine(message: { data: unknown[]; date: Date; level: string }): string {
+  const msg = composeLogText(message.data);
+  return JSON.stringify({
+    ts: message.date.toISOString(),
+    level: normalizeLogLevel(String(message.level)),
+    src: "app",
+    task_id: null,
+    doc_id: null,
+    code: extractLogCode(msg),
+    page: null,
+    msg,
+    detail: null,
+  });
+}
+
 function setupLogging(logsDir: string, isDev: boolean): void {
   mkdirSync(logsDir, { recursive: true });
   // preload:false —— 我们有自己的沙箱 preload，不让 electron-log 再注入一个
@@ -80,7 +124,10 @@ function setupLogging(logsDir: string, isDev: boolean): void {
 
   log.transports.file.level = "info";
   log.transports.file.maxSize = LOG_MAX_SIZE;
-  log.transports.file.format = "[{y}-{m}-{d} {h}:{i}:{s}.{ms}] [{level}] {text}";
+  /* 扁平九字段 JSONL（08 章 §1 契约），与引擎 logsetup.py._jsonl_line 同构。
+   * electron-log 的 format 函数约定返回「数组」（其元素即最终写入的整行内容），
+   * 故整行 JSON 包成单元素数组：joined 后就是这一行，前面不会再被拼时间戳/scope。 */
+  log.transports.file.format = ({ message }) => [formatAppLogLine(message)];
   log.transports.file.resolvePathFn = () => join(logsDir, "app-main.log");
   log.transports.file.archiveLogFn = (file) => {
     try {

@@ -3,8 +3,10 @@
 约束：
 - stdout 由 READY 握手独占（02 章 §1.1）：移除 loguru 默认控制台 sink，
   所有日志只落盘 logs/engine-*.jsonl；
-- loguru serialize=True 输出结构化 JSONL（task_id/doc_id/code/page 等业务字段
-  经 logger.bind(...) 进入 record.extra）；
+- 自定义 formatter 输出**扁平九字段 JSONL**（08 章 §1 契约：
+  ts/level/src/task_id/doc_id/code/page/msg/detail），与 Electron 侧同格式 ——
+  诊断包里两类日志从此可用同一套解析器合并时间线；业务字段（task_id/doc_id/code/page）
+  经 logger.bind(...) 进入 record.extra，未绑定即为 null；
 - 轮转 10MB / 最多 10 份 / 保留 14 天（loguru 原生 retention 二选一，
   这里用自定义回调同时满足份数与天数上限）；
 - uvicorn / fastapi 等标准 logging 全部拦截进 loguru，防止旁路污染 stdout；
@@ -13,10 +15,12 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time
 from contextlib import suppress
+from typing import Any
 
 from loguru import logger
 
@@ -24,6 +28,10 @@ from docfactory.config import Paths
 
 _MAX_FILES = 10
 _MAX_AGE_S = 14 * 24 * 3600
+
+# 08 章 §1 日志契约里的 src 字段：本进程恒为 "engine"（Electron 侧写 "app"），
+# 合并时间线时用它区分两个产日志的进程。
+_SRC = "engine"
 
 _configured = False
 
@@ -81,6 +89,50 @@ class InterceptHandler(logging.Handler):
         logger.opt(depth=depth, exception=record.exc_info).log(level, record.getMessage())
 
 
+def _detail(record: dict[str, Any]) -> Any:
+    """detail 字段：有异常时给「类型: 值」摘要（backtrace/diagnose=False，不含栈与变量值，
+    承诺不含文档内容）；无异常则 None。"""
+    exc = record.get("exception")
+    if exc is None:
+        return None
+    etype = getattr(exc, "type", None)
+    evalue = getattr(exc, "value", None)
+    if etype is not None:
+        return f"{etype.__name__}: {evalue}"
+    return str(exc)
+
+
+def _jsonl_line(record: dict[str, Any]) -> str:
+    """把一条 loguru record 拍平成 08 章 §1 的九字段 JSONL 行（不含换行）。
+
+    纯函数、无副作用：既是 formatter 的核心，也便于单测直接喂合成 record 断言字段形态。
+    """
+    extra = record.get("extra") or {}
+    payload = {
+        "ts": record["time"].isoformat(timespec="milliseconds"),
+        "level": record["level"].name.lower(),
+        "src": _SRC,
+        "task_id": extra.get("task_id"),
+        "doc_id": extra.get("doc_id"),
+        "code": extra.get("code"),
+        "page": extra.get("page"),
+        "msg": record["message"],
+        "detail": _detail(record),
+    }
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def _formatter(record: dict[str, Any]) -> str:
+    """loguru 的 format 回调：把序列化结果塞进 extra，模板只引用它。
+
+    用 **callable** formatter（而非 serialize=True）是关键——loguru 对 callable formatter
+    不会自动追加异常栈与换行，两者都由我们掌控，输出严格是「一行一个 JSON 对象」；
+    serialize=True 只能吐 loguru 私有的嵌套结构（无 src、键名层级全不同），不符契约。
+    """
+    record["extra"]["_jsonl"] = _jsonl_line(record)
+    return "{extra[_jsonl]}\n"
+
+
 def setup_logging(paths: Paths) -> None:
     """进程级初始化（幂等）；须在 Paths.ensure() 之后、uvicorn 启动之前调用。"""
     global _configured
@@ -91,7 +143,7 @@ def setup_logging(paths: Paths) -> None:
     logger.remove()  # 关键：默认 stderr sink 移除，控制台零输出
     logger.add(
         str(paths.logs / "engine-{time:YYYYMMDD-HHmmss}.jsonl"),
-        serialize=True,
+        format=_formatter,  # 扁平九字段 JSONL（08 章 §1 契约），见 _jsonl_line
         rotation="10 MB",
         retention=_retention,
         level="INFO",
